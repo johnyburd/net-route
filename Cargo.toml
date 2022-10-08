@@ -1,6 +1,8 @@
 [package]
 name = "net-route"
 version = "0.1.0"
+authors = ["Johnyburd <johnyburd8@gmail.com>"]
+
 edition = "2021"
 license = "MIT"
 description = "This crate provides a cross-platform interface for manipulating the routing table"
@@ -9,9 +11,14 @@ repository = "https://github.com/johnyburd/net-route"
 readme = "README.md"
 keywords = ["route", "network"]
 
+[package.metadata.docs.rs]
+
+targets = ["x86_64-apple-darwin"]
+
 
 [dependencies]
 ipnetwork = "0.20.0"
 
 [build-dependencies]
 bindgen = "0.60.1"
+
