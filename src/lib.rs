@@ -2,17 +2,19 @@ use std::{io, net::IpAddr};
 
 mod platform_impl;
 
-pub fn default_route() -> Result<IpAddr, io::Error> {
-    platform_impl::default_route()
+
+/// Fetch next-hop gateway for one of the default routes on the system
+pub fn default_gateway() -> Result<IpAddr, io::Error> {
+    platform_impl::default_gateway()
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::default_route;
+    use crate::default_gateway;
 
     #[test]
-    fn it_gets_default_route() {
-        let route = default_route().unwrap();
+    fn it_gets_default_gateway() {
+        let route = default_gateway().unwrap();
         println!("default route: {}", route);
     }
 }

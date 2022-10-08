@@ -19,7 +19,7 @@ unsafe fn sa_size(sa: *const sockaddr) -> usize {
     }
 }
 
-pub fn default_route() -> Result<IpAddr, Error> {
+pub fn default_gateway() -> Result<IpAddr, Error> {
     type LineBuf = [u8; MAXHOSTNAMELEN as usize];
     let mut needed: u64 = 0;
     let mut mib: [i32; 6] = [CTL_NET as i32, PF_ROUTE as i32, 0, 0, NET_RT_DUMP as i32, 0];
