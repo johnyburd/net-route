@@ -1,8 +1,8 @@
-#![cfg(target_os = "macos")]
 
 use std::env;
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
 fn main() {
     // Tell cargo to look for shared libraries in the specified directory
     //println!("cargo:rustc-link-search=/path/to/lib");
@@ -34,4 +34,9 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+
 }
