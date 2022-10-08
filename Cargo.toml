@@ -7,7 +7,11 @@ description = "This crate provides a cross-platform interface for manipulating t
 homepage = "https://github.com/johnyburd/net-route"
 repository = "https://github.com/johnyburd/net-route"
 readme = "README.md"
+keywords = ["route", "network"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+ipnetwork = "0.20.0"
+
+[build-dependencies]
+bindgen = "0.60.1"
