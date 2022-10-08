@@ -1,0 +1,13 @@
+[package]
+name = "net-route"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "This crate provides a cross-platform interface for manipulating the routing table"
+homepage = "https://github.com/johnyburd/net-route"
+repository = "https://github.com/johnyburd/net-route"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
