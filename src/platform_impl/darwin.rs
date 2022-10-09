@@ -4,11 +4,23 @@
 #![allow(dead_code)]
 
 use std::{
-    io::{Error, ErrorKind},
+    io::{Error, ErrorKind, self},
     net::IpAddr,
     ops::Add,
 };
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+
+pub(crate) struct Handle;
+
+impl Handle {
+    pub(crate) fn new() -> io::Result<Self> {
+        Ok(Self)
+    }
+
+    pub(crate) async fn default_gateway(&self) -> io::Result<IpAddr> {
+        default_gateway()
+    }
+}
 
 #[inline(always)]
 unsafe fn sa_size(sa: *const sockaddr) -> usize {
@@ -19,7 +31,7 @@ unsafe fn sa_size(sa: *const sockaddr) -> usize {
     }
 }
 
-pub fn default_gateway() -> Result<IpAddr, Error> {
+fn default_gateway() -> Result<IpAddr, Error> {
     type LineBuf = [u8; MAXHOSTNAMELEN as usize];
     let mut needed: u64 = 0;
     let mut mib: [i32; 6] = [CTL_NET as i32, PF_ROUTE as i32, 0, 0, NET_RT_DUMP as i32, 0];
