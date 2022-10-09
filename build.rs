@@ -1,9 +1,10 @@
 
-use std::env;
-use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 fn main() {
+
+    use std::env;
+    use std::path::PathBuf;
     // Tell cargo to look for shared libraries in the specified directory
     //println!("cargo:rustc-link-search=/path/to/lib");
 

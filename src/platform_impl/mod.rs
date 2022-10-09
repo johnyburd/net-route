@@ -1,4 +1,10 @@
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(doc)))]
 mod darwin;
-#[cfg(target_os = "macos")]
-pub use darwin::default_gateway;
+#[cfg(all(target_os = "macos", not(doc)))]
+pub(crate) use darwin::default_gateway;
+
+
+#[cfg(all(target_os = "linux", not(doc)))]
+mod linux;
+#[cfg(all(target_os = "linux", not(doc)))]
+pub(crate) use linux::default_gateway;
