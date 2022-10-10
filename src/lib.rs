@@ -17,6 +17,22 @@ impl Handle {
     pub async fn default_gateway(&self) -> io::Result<IpAddr> {
         self.0.default_gateway().await
     }
+
+    /// Add route to the system's routing table.
+    pub async fn add(&self, route: &Route) -> io::Result<()> {
+        if route.gateway.is_some() && route.ifindex.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "`gateway` and `ifindex` cannot both be set.",
+            ));
+        } else if route.gateway.is_none() && route.ifindex.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "`gateway` and `ifindex` cannot both be none.",
+            ));
+        }
+        self.0.add(route).await
+    }
 }
 
 /// Contains information that describes a route in the local computer's Ipv4 or Ipv6 routing table.
@@ -131,5 +147,14 @@ mod tests {
             ifindex: None,
         };
         assert_eq!(route.mask(), Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn it_adds_routes() {
+        let handle = Handle::new().unwrap();
+        let route = Route::new("10.10.0.1".parse().unwrap(), 32)
+            .with_gateway("192.168.1.1".parse().unwrap());
+        println!("route {:?}", route);
+        handle.add(&route).await.unwrap();
     }
 }
