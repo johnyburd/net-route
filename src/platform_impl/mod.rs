@@ -7,7 +7,7 @@ pub(crate) use darwin::Handle as PlatformHandle;
 #[cfg(all(target_os = "linux", not(doc)))]
 mod linux;
 #[cfg(all(target_os = "linux", not(doc)))]
-pub(crate) use linux::default_gateway;
+pub(crate) use linux::Handle as PlatformHandle;
 
 #[cfg(doc)]
 pub(crate) struct PlatformHandle;

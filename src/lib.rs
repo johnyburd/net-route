@@ -119,12 +119,7 @@ mod tests {
 
     #[test]
     fn it_calculates_v4_netmask() {
-        let mut route = Route {
-            destination: "10.10.0.0".parse().unwrap(),
-            prefix: 32,
-            gateway: None,
-            ifindex: None,
-        };
+        let mut route = Route::new("10.10.0.0".parse().unwrap(), 32);
 
         assert_eq!(route.mask(), "255.255.255.255".parse::<IpAddr>().unwrap());
 
@@ -140,12 +135,7 @@ mod tests {
 
     #[test]
     fn it_calculates_v6_netmask() {
-        let route = Route {
-            destination: "77ca:838b:9ec0:fc97:eedc:236a:9d41:31e5".parse().unwrap(),
-            prefix: 32,
-            gateway: None,
-            ifindex: None,
-        };
+        let route = Route::new("77ca:838b:9ec0:fc97:eedc:236a:9d41:31e5".parse().unwrap(), 32);
         assert_eq!(route.mask(), Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0));
     }
 
@@ -153,7 +143,7 @@ mod tests {
     async fn it_adds_routes() {
         let handle = Handle::new().unwrap();
         let route = Route::new("10.10.0.1".parse().unwrap(), 32)
-            .with_gateway("192.168.1.1".parse().unwrap());
+            .with_gateway("172.19.16.1".parse().unwrap());
         println!("route {:?}", route);
         handle.add(&route).await.unwrap();
     }
