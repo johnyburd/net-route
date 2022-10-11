@@ -1,6 +1,6 @@
 [package]
 name = "net-route"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Johnyburd <johnyburd8@gmail.com>"]
 
 edition = "2021"
@@ -13,7 +13,13 @@ keywords = ["route", "network", "ip"]
 
 [package.metadata.docs.rs]
 
-targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "i686-unknown-linux-gnu"]
+targets = [
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "i686-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "i686-pc-windows-msvc"
+]
 
 
 [dependencies]
@@ -23,6 +29,13 @@ futures = "0.3.24"
 [target.'cfg(target_os = "linux")'.dependencies]
 rtnetlink = "0.11.0"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3.9", features = [
+    "netioapi",
+    "winerror",
+    "ws2def",
+    "ifdef"
+] }
+
 [build-dependencies]
 bindgen = "0.60.1"
-

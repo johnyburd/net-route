@@ -12,25 +12,8 @@ impl Handle {
         Ok(Self(PlatformHandle::new()?))
     }
 
-    /// Fetch next-hop gateway for one of the default routes on the system
-    #[deprecated(since="0.1.3", note="I'm still figuring stuff out")]
-    pub async fn default_gateway(&self) -> io::Result<IpAddr> {
-        self.0.default_gateway().await
-    }
-
     /// Add route to the system's routing table.
     pub async fn add(&self, route: &Route) -> io::Result<()> {
-        if route.gateway.is_some() && route.ifindex.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "`gateway` and `ifindex` cannot both be set.",
-            ));
-        } else if route.gateway.is_none() && route.ifindex.is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "`gateway` and `ifindex` cannot both be none.",
-            ));
-        }
         self.0.add(route).await
     }
 }
@@ -49,14 +32,24 @@ pub struct Route {
     /// This must be `Some` if ifindex is `None`
     pub gateway: Option<IpAddr>,
 
-    /// The index of the local interface through which the next hop of this route should be reached.
+    /// The index of the local interface through which the next hop of this route may be reached.
     /// 
     /// This must be `Some` if gateway is `None`
     pub ifindex: Option<u32>,
 
    #[cfg(target_os = "linux")]
-    /// 
+    /// The routing table this route belongs to.
     pub table: u8,
+
+    #[cfg(target_os = "windows")]
+    /// The route metric offset value for this route.
+    pub metric: Option<u32>,
+
+    #[cfg(target_os = "windows")]
+    /// Luid of the local interface through which the next hop of this route may be reached.
+    /// 
+    /// If luid is specified, ifindex is optional.
+    pub luid: Option<u64>,
 }
 
 impl Route {
@@ -72,6 +65,10 @@ impl Route {
             #[cfg(target_os = "linux")]
             // default to main table
             table: 254,
+            #[cfg(target_os = "windows")]
+            metric: None,
+            #[cfg(target_os = "windows")]
+            luid: None,
         }
     }
 
@@ -94,6 +91,18 @@ impl Route {
         self
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn with_metric(mut self, metric: u32) -> Self {
+        self.metric = Some(metric);
+        self
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn with_luid(mut self, luid: u64) -> Self {
+        self.luid = Some(luid);
+        self
+    }
+
     pub fn mask(&self) -> IpAddr {
         match self.destination {
             IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX << (32 - self.prefix))),
@@ -107,15 +116,6 @@ mod tests {
     use std::net::{IpAddr, Ipv6Addr};
 
     use crate::{Handle, Route};
-
-    #[tokio::test]
-    async fn it_gets_default_gateway() {
-        let handle = Handle::new().unwrap();
-        #[allow(deprecated)]
-        let router = handle.default_gateway().await.unwrap();
-        
-        println!("default router: {}", router);
-    }
 
     #[test]
     fn it_calculates_v4_netmask() {
@@ -142,8 +142,11 @@ mod tests {
     #[tokio::test]
     async fn it_adds_routes() {
         let handle = Handle::new().unwrap();
-        let route = Route::new("10.10.0.1".parse().unwrap(), 32)
-            .with_gateway("172.19.16.1".parse().unwrap());
+        let route = Route::new("10.14.0.1".parse().unwrap(), 32)
+            //.with_luid(19985273102270464)
+            //.with_metric(5)
+            .with_ifindex(9)
+            .with_gateway("192.168.2.1".parse().unwrap());
         println!("route {:?}", route);
         handle.add(&route).await.unwrap();
     }
