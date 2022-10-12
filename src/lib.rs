@@ -7,7 +7,7 @@
 //! ## Examples
 //! #### Adding a route
 //! ```
-//! // route traffic destined for 10.14.0.0/24 to 192.1.2.2 using interface 9
+//! // route traffic destined for 10.14.0.0/24 to 192.1.2.1 using interface 9
 //! let handle = Handle::new()?;
 //! let route = Route::new("10.14.0.0".parse().unwrap(), 24)
 //!     .with_ifindex(9)
@@ -48,6 +48,12 @@ impl Handle {
     #[cfg(target_os = "windows")]
     pub fn route_listen_stream(&self) -> impl futures::Stream<Item = RouteChange> {
         self.0.route_listen_stream()
+    }
+
+    /// Returns a `Vec<Route>` containing a list of both ipv4 and v6 routes on the system.
+    #[cfg(target_os = "windows")]
+    pub async fn list(&self) -> io::Result<Vec<Route>> {
+        self.0.list().await
     }
 }
 
