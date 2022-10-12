@@ -1,3 +1,30 @@
+// SPDX-License-Identifier: MIT
+
+//! This project aims to provide a high level interface for manipulating and observing
+//! the routing table on a variety of platforms.
+//! 
+//! 
+//! ## Examples
+//! #### Adding a route
+//! ```
+//! // route traffic destined for 10.14.0.0/24 to 192.1.2.2 using interface 9
+//! let handle = Handle::new()?;
+//! let route = Route::new("10.14.0.0".parse().unwrap(), 24)
+//!     .with_ifindex(9)
+//!     .with_gateway("192.1.2.1".parse.unwrap());
+//! handle.add(&route).await
+//! ```
+//! 
+//! #### Listening to changes in the routing table
+//! ```
+//! let handle = Handle::new()?;
+//! let stream = handle.route_listen_stream();
+//! futures::pin_mut!(stream);
+//! while let Some(event) = stream.next().await {
+//!     println!("{:?}", value);
+//! }
+//! ```
+
 use std::{io, net::{IpAddr, Ipv4Addr, Ipv6Addr}};
 
 mod platform_impl;
@@ -16,6 +43,12 @@ impl Handle {
     pub async fn add(&self, route: &Route) -> io::Result<()> {
         self.0.add(route).await
     }
+
+    /// Returns a `Stream` which will yield a `RouteChange` event whenever a route is added, removed, or changed from the system's routing table.
+    #[cfg(target_os = "windows")]
+    pub fn route_listen_stream(&self) -> impl futures::Stream<Item = RouteChange> {
+        self.0.route_listen_stream()
+    }
 }
 
 /// Contains information that describes a route in the local computer's Ipv4 or Ipv6 routing table.
@@ -29,12 +62,12 @@ pub struct Route {
 
     /// The address of the next hop of this route.
     /// 
-    /// This must be `Some` if ifindex is `None`
+    /// On macOS, this must be `Some` if ifindex is `None`
     pub gateway: Option<IpAddr>,
 
     /// The index of the local interface through which the next hop of this route may be reached.
     /// 
-    /// This must be `Some` if gateway is `None`
+    /// On macOS, this must be `Some` if gateway is `None`
     pub ifindex: Option<u32>,
 
    #[cfg(target_os = "linux")]
@@ -91,18 +124,21 @@ impl Route {
         self
     }
 
+    /// Set route metric.
     #[cfg(target_os = "windows")]
     pub fn with_metric(mut self, metric: u32) -> Self {
         self.metric = Some(metric);
         self
     }
 
+    /// Set luid of the local interface through which the next hop of this route should be reached.
     #[cfg(target_os = "windows")]
     pub fn with_luid(mut self, luid: u64) -> Self {
         self.luid = Some(luid);
         self
     }
 
+    /// Get the netmask covering the network portion of the destination address.
     pub fn mask(&self) -> IpAddr {
         match self.destination {
             IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX << (32 - self.prefix))),
@@ -111,11 +147,18 @@ impl Route {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteChange {
+    Add(Route),
+    Delete(Route),
+    Change(Route),
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv6Addr};
 
-    use crate::{Handle, Route};
+    use crate::Route;
 
     #[test]
     fn it_calculates_v4_netmask() {
@@ -137,17 +180,5 @@ mod tests {
     fn it_calculates_v6_netmask() {
         let route = Route::new("77ca:838b:9ec0:fc97:eedc:236a:9d41:31e5".parse().unwrap(), 32);
         assert_eq!(route.mask(), Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0));
-    }
-
-    #[tokio::test]
-    async fn it_adds_routes() {
-        let handle = Handle::new().unwrap();
-        let route = Route::new("10.14.0.1".parse().unwrap(), 32)
-            //.with_luid(19985273102270464)
-            //.with_metric(5)
-            .with_ifindex(9)
-            .with_gateway("192.168.2.1".parse().unwrap());
-        println!("route {:?}", route);
-        handle.add(&route).await.unwrap();
     }
 }
