@@ -1,8 +1,7 @@
 #[cfg(all(target_os = "macos", not(doc)))]
-mod darwin;
+mod macos;
 #[cfg(all(target_os = "macos", not(doc)))]
-pub(crate) use darwin::Handle as PlatformHandle;
-
+pub(crate) use macos::Handle as PlatformHandle;
 
 #[cfg(all(target_os = "linux", not(doc)))]
 mod linux;
