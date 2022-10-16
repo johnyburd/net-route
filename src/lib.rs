@@ -47,7 +47,6 @@ impl Handle {
     }
 
     /// Returns a `Stream` which will yield a `RouteChange` event whenever a route is added, removed, or changed from the system's routing table.
-    #[cfg(target_os = "windows")]
     pub fn route_listen_stream(&self) -> impl futures::Stream<Item = RouteChange> {
         self.0.route_listen_stream()
     }
@@ -57,8 +56,14 @@ impl Handle {
         self.0.list().await
     }
 
+    /// Get one of the default routes on the system if there is at least one.
     pub async fn default_route(&self) -> io::Result<Option<Route>> {
         self.0.default_route().await
+    }
+
+    /// Remove a route from the system's routing table.
+    pub async fn delete(&self, route: &Route) -> io::Result<()> {
+        self.0.delete(route).await
     }
 }
 
