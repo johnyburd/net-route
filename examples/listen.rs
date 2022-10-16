@@ -1,4 +1,3 @@
-#![cfg(target_os = "windows")]
 
 use futures::StreamExt;
 use net_route::Handle;

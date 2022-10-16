@@ -45,15 +45,17 @@ impl Handle {
     }
 
     /// Returns a `Stream` which will yield a `RouteChange` event whenever a route is added, removed, or changed from the system's routing table.
-    #[cfg(target_os = "windows")]
     pub fn route_listen_stream(&self) -> impl futures::Stream<Item = RouteChange> {
         self.0.route_listen_stream()
     }
 
     /// Returns a `Vec<Route>` containing a list of both ipv4 and v6 routes on the system.
-    #[cfg(target_os = "windows")]
     pub async fn list(&self) -> io::Result<Vec<Route>> {
         self.0.list().await
+    }
+
+    pub async fn default_route(&self) -> io::Result<Option<Route>> {
+        self.0.default_route().await
     }
 }
 
