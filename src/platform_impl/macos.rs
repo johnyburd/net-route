@@ -27,8 +27,8 @@ impl Handle {
         Ok(Self)
     }
 
-    pub(crate) async fn default_gateway(&self) -> io::Result<IpAddr> {
-        default_gateway()
+    pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
+        Ok(default_gateway())
     }
 
     pub(crate) async fn add(&self, route: &Route) -> io::Result<()> {

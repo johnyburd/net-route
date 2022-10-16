@@ -56,6 +56,10 @@ impl Handle {
     pub async fn list(&self) -> io::Result<Vec<Route>> {
         self.0.list().await
     }
+
+    pub async fn default_route(&self) -> io::Result<Option<Route>> {
+        self.0.default_route().await
+    }
 }
 
 /// Contains information that describes a route in the local computer's Ipv4 or Ipv6 routing table.
