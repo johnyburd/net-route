@@ -54,8 +54,14 @@ impl Handle {
         self.0.list().await
     }
 
+    /// Get one of the default routes on the system if there is at least one.
     pub async fn default_route(&self) -> io::Result<Option<Route>> {
         self.0.default_route().await
+    }
+
+    /// Remove a route from the system's routing table.
+    pub async fn delete(&self, route: &Route) -> io::Result<()> {
+        self.0.delete(route).await
     }
 }
 

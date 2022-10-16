@@ -112,6 +112,36 @@ impl Handle {
         }
     }
 
+    pub(crate) async fn delete(&self, route: &Route) -> io::Result<()> {
+        let route_handle = self.handle.route();
+        let mut routes = match route.destination {
+            IpAddr::V4(_) => route_handle.get(rtnetlink::IpVersion::V4),
+            IpAddr::V6(_) => route_handle.get(rtnetlink::IpVersion::V6),
+        }
+        .execute();
+
+        while let Some(msg) = routes
+            .try_next()
+            .await
+            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+        {
+            let other_route: Route = msg.clone().into();
+            if other_route.destination == route.destination && other_route.prefix == route.prefix {
+                route_handle
+                    .del(msg)
+                    .execute()
+                    .await
+                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?;
+                return Ok(())
+            }
+        }
+
+        Err(Error::new(
+            io::ErrorKind::NotFound,
+            "No matching route found to delete",
+        ))
+    }
+
     pub(crate) async fn add(&self, route: &Route) -> io::Result<()> {
         let route_handle = self.handle.route();
         match route.destination {
@@ -177,11 +207,9 @@ impl Handle {
                 match msg {
                     RtnlMessage::NewRoute(msg) => _ = tx.send(RouteChange::Add(msg.into())),
                     RtnlMessage::DelRoute(msg) => _ = tx.send(RouteChange::Delete(msg.into())),
-                    m => println!("unhandled msg {:?}", m),
+                    _ => (),
                 }
             }
-            //let payload = message.payload;
-            //println!("Route change message - {:?}", payload);
         }
     }
 }
@@ -212,7 +240,6 @@ impl From<RouteMessage> for Route {
         let mut gateway = None;
         let mut destination = None;
         let mut ifindex = None;
-        println!("msg {:?}", &msg);
 
         for nla in msg.nlas {
             match nla {
