@@ -1,34 +1,67 @@
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![allow(dead_code)]
-
 use std::{
-    cmp::min,
-    io::{self, Error, ErrorKind},
-    net::IpAddr,
-    ops::Add,
+    io::{self, ErrorKind},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::prelude::FromRawFd,
 };
 
+use async_stream::stream;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
+    sync::broadcast,
 };
 
-use crate::Route;
+use crate::platform_impl::macos::bind::*;
+use crate::{Route, RouteChange};
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
-pub(crate) struct Handle;
+pub(crate) struct Handle {
+    tx: broadcast::Sender<RouteChange>,
+}
 
 impl Handle {
     pub(crate) fn new() -> io::Result<Self> {
-        Ok(Self)
+        let (tx, _) = broadcast::channel::<RouteChange>(16);
+        Ok(Self { tx })
     }
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
-        Ok(default_gateway())
+        for route in self.list().await? {
+            if (route.destination == Ipv4Addr::UNSPECIFIED
+                || route.destination == Ipv6Addr::UNSPECIFIED)
+                && route.prefix == 0
+                && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+                && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
+            {
+                return Ok(Some(route));
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn route_listen_stream(&self) -> impl futures::Stream<Item = RouteChange> {
+        let mut rx = self.tx.subscribe();
+        stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) => yield ev,
+                    Err(e) => match e {
+                        broadcast::error::RecvError::Closed => break,
+                        broadcast::error::RecvError::Lagged(_) => continue,
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn delete(&self, route: &Route) -> io::Result<()> {
+        add_route(
+            route.destination,
+            route.mask(),
+            None,
+            None,
+            false,
+        )
+        .await
     }
 
     pub(crate) async fn add(&self, route: &Route) -> io::Result<()> {
@@ -37,6 +70,7 @@ impl Handle {
             route.mask(),
             route.gateway,
             route.ifindex,
+            true,
         )
         .await
     }
@@ -46,73 +80,71 @@ impl Handle {
     }
 }
 
-#[inline(always)]
-unsafe fn sa_size(sa: *const sockaddr) -> usize {
-    if sa.is_null() || (*sa).sa_len == 0 {
-        std::mem::size_of::<usize>()
-    } else {
-        (((*sa).sa_len - 1) as usize | (std::mem::size_of::<usize>() - 1)).add(1)
+fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
+    let destination;
+    let mut gateway = None;
+    let mut ifindex = None;
+
+    // check if message has no destination
+    if hdr.rtm_addrs & (1 << RTAX_DST) == 0 {
+        return None;
     }
-}
-
-fn default_gateway() -> Result<IpAddr, Error> {
-    type LineBuf = [u8; MAXHOSTNAMELEN as usize];
-    let mut needed: u64 = 0;
-    let mut mib: [i32; 6] = [CTL_NET as i32, PF_ROUTE as i32, 0, 0, NET_RT_DUMP as i32, 0];
-    let mut line: LineBuf = [0; MAXHOSTNAMELEN as usize];
-
-    if unsafe {
-        sysctl(
-            mib.as_mut_ptr(),
-            6,
-            std::ptr::null_mut(),
-            &mut needed,
-            std::ptr::null_mut(),
-            0,
-        )
-    } < 0
-    {
-        return Err(Error::new(ErrorKind::Other, "route dump estimate"));
-    }
-
-    let mut buf: Vec<u8> = Vec::with_capacity(needed as usize);
-
-    if unsafe {
-        sysctl(
-            mib.as_mut_ptr(),
-            6,
-            buf.as_mut_ptr() as _,
-            &mut needed,
-            std::ptr::null_mut(),
-            0,
-        )
-    } < 0
-    {
-        return Err(Error::new(ErrorKind::Other, "route dump"));
-    }
-
-    if buf.capacity() != needed as usize {
-        return Err(Error::new(ErrorKind::Other, "unexpected size!"));
-    }
-
-    let rtm: *const rt_msghdr = buf.as_ptr() as *const _;
-    let sa: *const sockaddr = unsafe { rtm.add(1) } as *const _;
-
-    let sockin: *const sockaddr_in = unsafe { (sa as *const u8).add(sa_size(sa)) } as *const _;
 
     unsafe {
-        inet_ntop(
-            AF_INET as i32,
-            &(*sockin).sin_addr.s_addr as *const _ as *const _,
-            line.as_mut_ptr() as *mut _,
-            std::mem::size_of::<LineBuf>() as u32 - 1,
-        )
+        let dst_sa: &sockaddr = std::mem::transmute((msg as *mut sockaddr).add(RTAX_DST as usize));
+        destination = sa_to_ip(dst_sa).unwrap();
+    }
+
+    let mut prefix = match destination {
+        IpAddr::V4(_) => 32,
+        IpAddr::V6(_) => 128,
     };
 
-    let router = String::from_utf8_lossy(&line);
-    let router = router.trim_matches(char::from(0));
+    // check if message has a gateway
+    if hdr.rtm_addrs & (1 << RTAX_GATEWAY) != 0 {
+        unsafe {
+            //let gw_sa: &sockaddr = std::mem::transmute(msg);
+            let gw_sa: &sockaddr =
+                std::mem::transmute((msg as *mut sockaddr).add(RTAX_GATEWAY as usize));
 
-    Ok(router.parse().unwrap())
+            // try to convert sockaddr to ip
+            gateway = sa_to_ip(gw_sa);
+            // if that fails try to convert it to a link
+            if gateway.is_none() {
+                if let Some((_mac, ifidx)) = sa_to_link(gw_sa) {
+                    // TODO do something with mac?
+                    ifindex = Some(ifidx as u32);
+                }
+            }
+        }
+    }
+
+    // check if message has netmask
+    if hdr.rtm_addrs & (1 << RTAX_NETMASK) != 0 {
+        unsafe {
+            match destination {
+                IpAddr::V4(_) => {
+                    let mask_sa: &sockaddr_in =
+                        std::mem::transmute((msg as *mut sockaddr).add(RTAX_NETMASK as usize));
+                    let octets: [u8; 4] = mask_sa.sin_addr.s_addr.to_ne_bytes();
+                    prefix = u32::from_be_bytes(octets).leading_ones() as u8;
+                }
+                IpAddr::V6(_) => {
+                    let mask_sa: &sockaddr_in6 =
+                        std::mem::transmute((msg as *mut sockaddr).add(RTAX_NETMASK as usize));
+                    let octets: [u8; 16] = mask_sa.sin6_addr.__u6_addr.__u6_addr8;
+                    prefix = u128::from_be_bytes(octets).leading_ones() as u8;
+                }
+            }
+        }
+    }
+
+    Some(Route {
+        destination,
+        prefix,
+        gateway,
+        ifindex,
+    })
 }
 
 #[repr(C)]
@@ -168,10 +200,7 @@ unsafe fn sa_to_ip(sa: &sockaddr) -> Option<IpAddr> {
             let octets: [u8; 16] = inet6.sin6_addr.__u6_addr.__u6_addr8;
             Some(IpAddr::from(octets))
         }
-        AF_LINK => {
-            // TODO
-            None
-        }
+        AF_LINK => None,
         _ => None,
     }
 }
@@ -199,11 +228,6 @@ unsafe fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
         }
         _ => None,
     }
-}
-
-#[inline]
-const fn align(len: usize) -> usize {
-    (len + 3) & !3
 }
 
 async fn list_routes() -> io::Result<Vec<Route>> {
@@ -247,20 +271,17 @@ async fn list_routes() -> io::Result<Vec<Route>> {
         return Err(io::Error::last_os_error());
     }
 
-    // TODO we know capacity here
     let mut routes = vec![];
-
     let mut offset = 0;
+
     loop {
         let buf = &mut msgs_buf[offset..];
 
-        println!("remaining {}", buf.len());
         if buf.len() < std::mem::size_of::<rt_msghdr>() {
             break;
         }
 
         let rt_hdr = unsafe { std::mem::transmute::<_, &rt_msghdr>(buf.as_ptr()) };
-        //assert!(rt_hdr.rtm_addrs < RTAX_MAX as i32);
         assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
         if rt_hdr.rtm_errno != 0 {
             return Err(io::Error::new(
@@ -270,108 +291,16 @@ async fn list_routes() -> io::Result<Vec<Route>> {
         }
 
         let msg_len = rt_hdr.rtm_msglen as usize;
-        println!("msg len {}", msg_len);
         offset += msg_len;
 
-        //let rtm_pkt = &mut buf[..msg_len];
-        //assert!(rtm_pkt.len() >= msg_len);
-        let mut rt_msg = &mut buf[std::mem::size_of::<rt_msghdr>()..msg_len];
-
-        // check if route has a destination
-        if rt_hdr.rtm_addrs & (1 << RTAX_DST) == 0 {
+        if rt_hdr.rtm_flags as u32 & RTF_WASCLONED != 0 {
             continue;
         }
+        let rt_msg = &mut buf[std::mem::size_of::<rt_msghdr>()..msg_len];
 
-        let sa = unsafe { std::mem::transmute::<_, &sockaddr>(rt_msg.as_ptr()) };
-        let sa_len = sa.sa_len as usize;
-        let dst = match unsafe { sa_to_ip(sa) } {
-            None => continue,
-            Some(dst) => dst,
-        };
-
-        rt_msg = &mut rt_msg[align(sa_len)..];
-
-        let mut gw = None;
-        let mut ifindex = None;
-
-        if rt_hdr.rtm_addrs & (1 << RTAX_GATEWAY) != 0 {
-            println!("some gateway");
-            unsafe {
-                let gw_sa = std::mem::transmute::<_, &sockaddr>(rt_msg.as_ptr());
-                gw = sa_to_ip(gw_sa);
-                if let Some((maybe_mac, ifidx)) = sa_to_link(gw_sa) {
-                    // TODO
-                    ifindex = Some(ifidx as u32);
-                }
-                rt_msg = &mut rt_msg[align(gw_sa.sa_len.into())..];
-            }
-        } else {
-            println!("No gateway")
+        if let Some(route) = message_to_route(rt_hdr, rt_msg.as_mut_ptr()) {
+            routes.push(route);
         }
-
-        let mut mask = None;
-        if rt_hdr.rtm_addrs & (1 << RTAX_NETMASK) != 0 {
-            let mask_len = rt_msg[0];
-            mask = match dst {
-                IpAddr::V4(_) if mask_len > 0 => {
-                    let mut octets = [0u8; 4];
-                    println!("mask len {}", mask_len);
-                    let mask_len = min(mask_len - 1, 4) as usize;
-                    (&mut octets[..mask_len]).copy_from_slice(&rt_msg[1..mask_len + 1]);
-                    Some(IpAddr::from(octets))
-                }
-                //IpAddr::V4(_) if mask_len == 0 => Some(IpAddr::from([0u8; 4])),
-                IpAddr::V6(_) if mask_len > 0 => {
-                    let mut octets = [0u8; 16];
-                    let mask_len = min(mask_len - 1, 16) as usize;
-                    println!("mask len {}", mask_len);
-                    (&mut octets[..mask_len]).copy_from_slice(&rt_msg[1..mask_len + 1]);
-                    Some(IpAddr::from(octets))
-                }
-                //IpAddr::V6(_) if mask_len == 0 => Some(IpAddr::from([0u8; 16])),
-                //_ => unreachable!()
-                _ => None,
-            }
-        }
-
-        let prefix_len = mask
-            .map(|addr| match addr {
-                IpAddr::V4(addr) => {
-                    let mask = u32::from(addr);
-                    println!("mask {:032b}", !mask);
-                    (!mask).leading_zeros() as u8
-                }
-                IpAddr::V6(addr) => {
-                    let mask = u128::from(addr);
-                    println!("mask {:0128b}", !mask);
-                    (!mask).leading_zeros() as u8
-                }
-            })
-            .unwrap_or_else(|| match dst {
-                // TODO not sure if this is right
-                IpAddr::V4(addr) => 32 - u32::from(addr).trailing_zeros(),
-                IpAddr::V6(addr) => 128 - u128::from(addr).trailing_zeros(),
-            } as u8);
-
-        let prefix_len = match dst {
-            // TODO not sure if this is right
-            IpAddr::V4(addr) => 32 - u32::from(addr).trailing_zeros(),
-            IpAddr::V6(addr) => 128 - u128::from(addr).trailing_zeros(),
-        } as u8;
-
-        let mut route = Route::new(dst, prefix_len);
-        route.gateway = gw;
-        route.ifindex = ifindex;
-
-        if let Some(mask) = mask {
-            println!("len {}", prefix_len);
-            //assert_eq!(route.mask(), mask);
-        }
-        routes.push(route);
-
-        //let prefix_len = let mask = u32::from(mask);
-
-        //let prefix = (!mask).leading_zeros() as u8;
     }
 
     Ok(routes)
@@ -382,10 +311,17 @@ async fn add_route(
     dst_mask: IpAddr,
     gateway: Option<IpAddr>,
     ifindex: Option<u32>,
+    add: bool,
 ) -> io::Result<()> {
     let mut rtm_flags = (RTF_STATIC | RTF_UP) as i32;
-    if gateway.is_some() {
+    // TODO not sure about this !add
+    if gateway.is_some() || !add {
         rtm_flags |= RTF_GATEWAY as i32;
+    }
+
+    let mut rtm_addrs = RTA_DST | RTA_NETMASK;
+    if add {
+        rtm_addrs |= RTA_GATEWAY;
     }
 
     let mut rtmsg = m_rtmsg {
@@ -395,7 +331,7 @@ async fn add_route(
             rtm_type: RTM_ADD as u8,
             rtm_index: 0,
             rtm_flags,
-            rtm_addrs: (RTA_DST | RTA_NETMASK | RTA_GATEWAY) as i32, // 7
+            rtm_addrs: rtm_addrs as i32,
             rtm_pid: 0,
             rtm_seq: 1,
             rtm_errno: 0,
@@ -560,9 +496,9 @@ async fn add_route(
 
     let mut buf = [0u8; std::mem::size_of::<m_rtmsg>()];
 
-    let amt = f.read(&mut buf).await?;
+    let len = f.read(&mut buf).await?;
 
-    let _ = &mut rtmsg.attrs[..amt as usize - std::mem::size_of::<rt_msghdr>()];
+    let _ = &mut rtmsg.attrs[..len as usize - std::mem::size_of::<rt_msghdr>()];
 
     Ok(())
 }
