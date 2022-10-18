@@ -157,8 +157,8 @@ impl Route {
     /// Get the netmask covering the network portion of the destination address.
     pub fn mask(&self) -> IpAddr {
         match self.destination {
-            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX << (32 - self.prefix))),
-            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::from(u128::MAX << (128 - self.prefix))),
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0))),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::from(u128::MAX.checked_shl(128 - self.prefix as u32).unwrap_or(0))),
         }
     }
 }
