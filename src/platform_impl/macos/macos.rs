@@ -8,7 +8,7 @@ use async_stream::stream;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::broadcast,
+    sync::broadcast, task::JoinHandle,
 };
 
 use crate::platform_impl::macos::bind::*;
@@ -16,12 +16,23 @@ use crate::{Route, RouteChange};
 
 pub(crate) struct Handle {
     tx: broadcast::Sender<RouteChange>,
+    listen_handle: JoinHandle<()>,
 }
 
 impl Handle {
     pub(crate) fn new() -> io::Result<Self> {
+        // TODO wait until user registers a listener to open the socket
         let (tx, _) = broadcast::channel::<RouteChange>(16);
-        Ok(Self { tx })
+
+        let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, 0) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let route_fd = unsafe { File::from_raw_fd(fd) };
+
+        let listen_handle = tokio::spawn(Self::listen(tx.clone(), route_fd));
+
+        Ok(Self { tx, listen_handle })
     }
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
@@ -54,7 +65,7 @@ impl Handle {
     }
 
     pub(crate) async fn delete(&self, route: &Route) -> io::Result<()> {
-        add_route(
+        add_or_del_route(
             route.destination,
             route.mask(),
             None,
@@ -65,7 +76,7 @@ impl Handle {
     }
 
     pub(crate) async fn add(&self, route: &Route) -> io::Result<()> {
-        add_route(
+        add_or_del_route(
             route.destination,
             route.mask(),
             route.gateway,
@@ -77,6 +88,35 @@ impl Handle {
 
     pub(crate) async fn list(&self) -> io::Result<Vec<Route>> {
         list_routes().await
+    }
+
+    async fn listen(tx: broadcast::Sender<RouteChange>, mut sock: File) {
+        let mut buf = [0u8; 2048];
+        loop {
+            // TODO: should probably use this
+            let _read = sock.read(&mut buf).await.expect("sock read err");
+            let hdr: &rt_msghdr;
+            let route = unsafe {
+                hdr = std::mem::transmute(buf.as_mut_ptr());
+                let msg = (hdr as *const rt_msghdr).add(1) as *mut u8;
+                message_to_route(hdr, msg)
+            };
+
+            if let Some(route) = route {
+                _ = tx.send(match hdr.rtm_type as u32 {
+                    RTM_ADD => RouteChange::Add(route),
+                    RTM_DELETE => RouteChange::Delete(route),
+                    RTM_CHANGE => RouteChange::Change(route),
+                    _ => continue,
+                });
+            }
+        }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.listen_handle.abort();
     }
 }
 
@@ -92,7 +132,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
 
     unsafe {
         let dst_sa: &sockaddr = std::mem::transmute((msg as *mut sockaddr).add(RTAX_DST as usize));
-        destination = sa_to_ip(dst_sa).unwrap();
+        destination = sa_to_ip(dst_sa)?;
     }
 
     let mut prefix = match destination {
@@ -149,6 +189,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[allow(non_camel_case_types)]
 struct m_rtmsg {
     hdr: rt_msghdr,
     attrs: [u8; 128],
@@ -284,10 +325,7 @@ async fn list_routes() -> io::Result<Vec<Route>> {
         let rt_hdr = unsafe { std::mem::transmute::<_, &rt_msghdr>(buf.as_ptr()) };
         assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
         if rt_hdr.rtm_errno != 0 {
-            return Err(io::Error::new(
-                ErrorKind::Other,
-                format!("Rtm err {}", rt_hdr.rtm_errno),
-            ));
+            return Err(code_to_error(rt_hdr.rtm_errno))
         }
 
         let msg_len = rt_hdr.rtm_msglen as usize;
@@ -306,7 +344,18 @@ async fn list_routes() -> io::Result<Vec<Route>> {
     Ok(routes)
 }
 
-async fn add_route(
+fn code_to_error(err: i32) -> io::Error {
+    let kind = match err {
+        17 => io::ErrorKind::AlreadyExists, // EEXIST
+        3 => io::ErrorKind::NotFound, // ESRCH
+        3436 => io::ErrorKind::OutOfMemory, // ENOBUFS
+        _ => io::ErrorKind::Other,
+    };
+
+    io::Error::new(kind, format!("rtm_errno {}", err))
+}
+
+async fn add_or_del_route(
     dst: IpAddr,
     dst_mask: IpAddr,
     gateway: Option<IpAddr>,
@@ -324,11 +373,13 @@ async fn add_route(
         rtm_addrs |= RTA_GATEWAY;
     }
 
+    let rtm_type = if add { RTM_ADD } else { RTM_DELETE } as u8;
+
     let mut rtmsg = m_rtmsg {
         hdr: rt_msghdr {
             rtm_msglen: 128,
             rtm_version: RTM_VERSION as u8,
-            rtm_type: RTM_ADD as u8,
+            rtm_type,
             rtm_index: 0,
             rtm_flags,
             rtm_addrs: rtm_addrs as i32,
@@ -496,9 +547,20 @@ async fn add_route(
 
     let mut buf = [0u8; std::mem::size_of::<m_rtmsg>()];
 
-    let len = f.read(&mut buf).await?;
+    let read = f.read(&mut buf).await?;
 
-    let _ = &mut rtmsg.attrs[..len as usize - std::mem::size_of::<rt_msghdr>()];
+    if read < std::mem::size_of::<rt_msghdr>() {
+        return Err(io::Error::new(
+            ErrorKind::Other,
+            "Unexpected message len",
+        ));
+    }
+
+    let rt_hdr: &rt_msghdr = unsafe { std::mem::transmute(buf.as_ptr()) };
+    assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
+    if rt_hdr.rtm_errno != 0 {
+        return Err(code_to_error(rt_hdr.rtm_errno))
+    }
 
     Ok(())
 }
