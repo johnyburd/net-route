@@ -2,8 +2,8 @@
 
 //! This project aims to provide a high level interface for manipulating and observing
 //! the routing table on a variety of platforms.
-//! 
-//! 
+//!
+//!
 //! ## Examples
 //! #### Adding a route
 //! ```
@@ -14,7 +14,7 @@
 //!     .with_gateway("192.1.2.1".parse.unwrap());
 //! handle.add(&route).await
 //! ```
-//! 
+//!
 //! #### Listening to changes in the routing table
 //! ```
 //! let handle = Handle::new()?;
@@ -25,11 +25,13 @@
 //! }
 //! ```
 
-use std::{io, net::{IpAddr, Ipv4Addr, Ipv6Addr}};
+use std::{
+    io,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+};
 
 mod platform_impl;
 use platform_impl::PlatformHandle;
-
 
 /// Handle that abstracts initialization and cleanup of resources needed to operate on the routing table.
 pub struct Handle(PlatformHandle);
@@ -75,16 +77,16 @@ pub struct Route {
     pub prefix: u8,
 
     /// The address of the next hop of this route.
-    /// 
+    ///
     /// On macOS, this must be `Some` if ifindex is `None`
     pub gateway: Option<IpAddr>,
 
     /// The index of the local interface through which the next hop of this route may be reached.
-    /// 
+    ///
     /// On macOS, this must be `Some` if gateway is `None`
     pub ifindex: Option<u32>,
 
-   #[cfg(target_os = "linux")]
+    #[cfg(target_os = "linux")]
     /// The routing table this route belongs to.
     pub table: u8,
 
@@ -94,14 +96,14 @@ pub struct Route {
 
     #[cfg(target_os = "windows")]
     /// Luid of the local interface through which the next hop of this route may be reached.
-    /// 
+    ///
     /// If luid is specified, ifindex is optional.
     pub luid: Option<u64>,
 }
 
 impl Route {
     /// Create a route that matches a given destination network.
-    /// 
+    ///
     /// Either the gateway or interface should be set before attempting to add to a routing table.
     pub fn new(destination: IpAddr, prefix: u8) -> Self {
         Self {
@@ -155,8 +157,8 @@ impl Route {
     /// Get the netmask covering the network portion of the destination address.
     pub fn mask(&self) -> IpAddr {
         match self.destination {
-            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX << (32 - self.prefix))),
-            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::from(u128::MAX << (128 - self.prefix))),
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0))),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::from(u128::MAX.checked_shl(128 - self.prefix as u32).unwrap_or(0))),
         }
     }
 }
@@ -192,7 +194,13 @@ mod tests {
 
     #[test]
     fn it_calculates_v6_netmask() {
-        let route = Route::new("77ca:838b:9ec0:fc97:eedc:236a:9d41:31e5".parse().unwrap(), 32);
-        assert_eq!(route.mask(), Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0));
+        let route = Route::new(
+            "77ca:838b:9ec0:fc97:eedc:236a:9d41:31e5".parse().unwrap(),
+            32,
+        );
+        assert_eq!(
+            route.mask(),
+            Ipv6Addr::new(0xffff, 0xffff, 0, 0, 0, 0, 0, 0)
+        );
     }
 }

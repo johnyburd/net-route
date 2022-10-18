@@ -143,7 +143,8 @@ impl Handle {
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
         for route in self.list().await? {
             if (route.destination == Ipv4Addr::UNSPECIFIED
-                || route.destination == Ipv6Addr::UNSPECIFIED && route.prefix == 0)
+                || route.destination == Ipv6Addr::UNSPECIFIED)
+                && route.prefix == 0
                 && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
                 && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
             {
