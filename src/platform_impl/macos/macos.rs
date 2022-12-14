@@ -544,11 +544,14 @@ async fn add_or_del_route(
         return Err(io::Error::last_os_error());
     }
 
-    let ptr = &rtmsg as *const m_rtmsg as *const u8;
-    let len = rtmsg.hdr.rtm_msglen as usize;
+    let slice = {
+        let ptr = &rtmsg as *const m_rtmsg as *const u8;
+        let len = rtmsg.hdr.rtm_msglen as usize;
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    };
     let mut f = unsafe { File::from_raw_fd(fd) };
-    f.write_all(unsafe { std::slice::from_raw_parts(ptr, len) })
-        .await?;
+
+    f.write_all(slice).await?;
 
     let mut buf = [0u8; std::mem::size_of::<m_rtmsg>()];
 
