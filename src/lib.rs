@@ -33,7 +33,7 @@ use std::{
 mod platform_impl;
 use platform_impl::PlatformHandle;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(doc)))]
 pub use platform_impl::ifname_to_index;
 
 /// Handle that abstracts initialization and cleanup of resources needed to operate on the routing table.
