@@ -1,6 +1,8 @@
 #[cfg(all(target_os = "macos", not(doc)))]
 mod macos;
 #[cfg(all(target_os = "macos", not(doc)))]
+pub use macos::ifname_to_index;
+#[cfg(all(target_os = "macos", not(doc)))]
 pub(crate) use macos::Handle as PlatformHandle;
 
 #[cfg(all(target_os = "linux", not(doc)))]

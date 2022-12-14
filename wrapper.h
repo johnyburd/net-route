@@ -5,3 +5,4 @@
 #include <arpa/inet.h>
 #include <net/route.h>
 #include <net/if_dl.h>
+#include <net/if.h>

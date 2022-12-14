@@ -33,6 +33,9 @@ use std::{
 mod platform_impl;
 use platform_impl::PlatformHandle;
 
+#[cfg(target_os = "macos")]
+pub use platform_impl::ifname_to_index;
+
 /// Handle that abstracts initialization and cleanup of resources needed to operate on the routing table.
 pub struct Handle(PlatformHandle);
 
@@ -157,8 +160,12 @@ impl Route {
     /// Get the netmask covering the network portion of the destination address.
     pub fn mask(&self) -> IpAddr {
         match self.destination {
-            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0))),
-            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::from(u128::MAX.checked_shl(128 - self.prefix as u32).unwrap_or(0))),
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::from(
+                u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0),
+            )),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::from(
+                u128::MAX.checked_shl(128 - self.prefix as u32).unwrap_or(0),
+            )),
         }
     }
 }

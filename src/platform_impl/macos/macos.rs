@@ -1,4 +1,5 @@
 use std::{
+    ffi::CString,
     io::{self, ErrorKind},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::prelude::FromRawFd,
@@ -8,11 +9,22 @@ use async_stream::stream;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::broadcast, task::JoinHandle,
+    sync::broadcast,
+    task::JoinHandle,
 };
 
 use crate::platform_impl::macos::bind::*;
 use crate::{Route, RouteChange};
+
+pub fn ifname_to_index(name: &str) -> Option<u32> {
+    let name = CString::new(name).ok()?;
+    let idx = unsafe { if_nametoindex(name.as_ptr()) };
+    if idx != 0 {
+        Some(idx)
+    } else {
+        None
+    }
+}
 
 pub(crate) struct Handle {
     tx: broadcast::Sender<RouteChange>,
@@ -65,14 +77,7 @@ impl Handle {
     }
 
     pub(crate) async fn delete(&self, route: &Route) -> io::Result<()> {
-        add_or_del_route(
-            route.destination,
-            route.mask(),
-            None,
-            None,
-            false,
-        )
-        .await
+        add_or_del_route(route.destination, route.mask(), None, None, false).await
     }
 
     pub(crate) async fn add(&self, route: &Route) -> io::Result<()> {
@@ -325,7 +330,7 @@ async fn list_routes() -> io::Result<Vec<Route>> {
         let rt_hdr = unsafe { std::mem::transmute::<_, &rt_msghdr>(buf.as_ptr()) };
         assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
         if rt_hdr.rtm_errno != 0 {
-            return Err(code_to_error(rt_hdr.rtm_errno))
+            return Err(code_to_error(rt_hdr.rtm_errno));
         }
 
         let msg_len = rt_hdr.rtm_msglen as usize;
@@ -347,7 +352,7 @@ async fn list_routes() -> io::Result<Vec<Route>> {
 fn code_to_error(err: i32) -> io::Error {
     let kind = match err {
         17 => io::ErrorKind::AlreadyExists, // EEXIST
-        3 => io::ErrorKind::NotFound, // ESRCH
+        3 => io::ErrorKind::NotFound,       // ESRCH
         3436 => io::ErrorKind::OutOfMemory, // ENOBUFS
         _ => io::ErrorKind::Other,
     };
@@ -550,16 +555,13 @@ async fn add_or_del_route(
     let read = f.read(&mut buf).await?;
 
     if read < std::mem::size_of::<rt_msghdr>() {
-        return Err(io::Error::new(
-            ErrorKind::Other,
-            "Unexpected message len",
-        ));
+        return Err(io::Error::new(ErrorKind::Other, "Unexpected message len"));
     }
 
     let rt_hdr: &rt_msghdr = unsafe { std::mem::transmute(buf.as_ptr()) };
     assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
     if rt_hdr.rtm_errno != 0 {
-        return Err(code_to_error(rt_hdr.rtm_errno))
+        return Err(code_to_error(rt_hdr.rtm_errno));
     }
 
     Ok(())
