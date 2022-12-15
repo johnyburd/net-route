@@ -132,7 +132,7 @@ impl Handle {
                     .execute()
                     .await
                     .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?;
-                return Ok(())
+                return Ok(());
             }
         }
 
@@ -149,6 +149,7 @@ impl Handle {
                 let mut msg = route_handle
                     .add()
                     .v4()
+                    .table(route.table)
                     .destination_prefix(addr, route.prefix);
 
                 if let Some(ifindex) = route.ifindex {
@@ -174,6 +175,7 @@ impl Handle {
                 let mut msg = route_handle
                     .add()
                     .v6()
+                    .table(route.table)
                     .destination_prefix(addr, route.prefix);
 
                 if let Some(ifindex) = route.ifindex {
