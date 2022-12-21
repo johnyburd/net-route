@@ -1,6 +1,6 @@
 [package]
 name = "net-route"
-version = "0.2.4"
+version = "0.2.5"
 authors = ["Johnyburd <johnyburd8@gmail.com>"]
 
 edition = "2021"
