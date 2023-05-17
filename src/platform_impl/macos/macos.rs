@@ -1,6 +1,7 @@
 use std::{
     ffi::CString,
     io::{self, ErrorKind},
+    mem::size_of,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::prelude::FromRawFd,
 };
@@ -49,8 +50,7 @@ impl Handle {
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
         for route in self.list().await? {
-            if (route.destination == Ipv4Addr::UNSPECIFIED
-                || route.destination == Ipv6Addr::UNSPECIFIED)
+            if (route.destination == Ipv4Addr::UNSPECIFIED || route.destination == Ipv6Addr::UNSPECIFIED)
                 && route.prefix == 0
                 && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
                 && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
@@ -81,14 +81,7 @@ impl Handle {
     }
 
     pub(crate) async fn add(&self, route: &Route) -> io::Result<()> {
-        add_or_del_route(
-            route.destination,
-            route.mask(),
-            route.gateway,
-            route.ifindex,
-            true,
-        )
-        .await
+        add_or_del_route(route.destination, route.mask(), route.gateway, route.ifindex, true).await
     }
 
     pub(crate) async fn list(&self) -> io::Result<Vec<Route>> {
@@ -125,71 +118,57 @@ impl Drop for Handle {
     }
 }
 
-fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
-    let destination;
-    let mut gateway = None;
-    let mut ifindex = None;
-
-    // check if message has no destination
+fn message_to_route(hdr: &rt_msghdr, mut msg: *const u8) -> Option<Route> {
     if hdr.rtm_addrs & (1 << RTAX_DST) == 0 {
         return None;
     }
 
-    unsafe {
-        let dst_sa: &sockaddr = std::mem::transmute((msg as *mut sockaddr).add(RTAX_DST as usize));
-        destination = sa_to_ip(dst_sa)?;
-    }
-
-    let mut prefix = match destination {
-        IpAddr::V4(_) => 32,
-        IpAddr::V6(_) => 128,
-    };
-
-    // check if message has a gateway
-    if hdr.rtm_addrs & (1 << RTAX_GATEWAY) != 0 {
+    let mut destination = None;
+    let mut gateway = None;
+    let mut prefix = 0;
+    for rtax in 0..(RTAX_NETMASK + 1) {
         unsafe {
-            //let gw_sa: &sockaddr = std::mem::transmute(msg);
-            let gw_sa: &sockaddr =
-                std::mem::transmute((msg as *mut sockaddr).add(RTAX_GATEWAY as usize));
-
-            // try to convert sockaddr to ip
-            gateway = sa_to_ip(gw_sa);
-            // if that fails try to convert it to a link
-            if gateway.is_none() {
-                if let Some((_mac, ifidx)) = sa_to_link(gw_sa) {
-                    // TODO do something with mac?
-                    ifindex = Some(ifidx as u32);
+            let sa: &sockaddr = &*msg.cast();
+            match rtax {
+                RTAX_DST => {
+                    destination = sa_to_ip(sa);
+                    if destination.is_none() {
+                        return None;
+                    }
+                    match destination.as_ref().unwrap() {
+                        IpAddr::V4(_) => {
+                            prefix = 32;
+                        }
+                        IpAddr::V6(_) => {
+                            prefix = 128;
+                        }
+                    }
                 }
+                RTAX_GATEWAY => {
+                    gateway = sa_to_ip(sa);
+                }
+                RTAX_NETMASK => match destination.as_ref().unwrap() {
+                    IpAddr::V4(_) => {
+                        let mask_sa: &sockaddr_in = std::mem::transmute(sa);
+                        prefix = u32::from_be(mask_sa.sin_addr.s_addr as u32).leading_ones() as u8;
+                    }
+                    IpAddr::V6(_) => {
+                        let mask_sa: &sockaddr_in6 = std::mem::transmute(sa);
+                        prefix = u128::from_be_bytes(mask_sa.sin6_addr.__u6_addr.__u6_addr8).leading_ones() as u8;
+                    }
+                },
+                _ => break,
             }
+            msg = msg.add((sa.sa_len as usize).max(size_of::<std::ffi::c_long>()));
         }
     }
 
-    // check if message has netmask
-    if hdr.rtm_addrs & (1 << RTAX_NETMASK) != 0 {
-        unsafe {
-            match destination {
-                IpAddr::V4(_) => {
-                    let mask_sa: &sockaddr_in =
-                        std::mem::transmute((msg as *mut sockaddr).add(RTAX_NETMASK as usize));
-                    let octets: [u8; 4] = mask_sa.sin_addr.s_addr.to_ne_bytes();
-                    prefix = u32::from_be_bytes(octets).leading_ones() as u8;
-                }
-                IpAddr::V6(_) => {
-                    let mask_sa: &sockaddr_in6 =
-                        std::mem::transmute((msg as *mut sockaddr).add(RTAX_NETMASK as usize));
-                    let octets: [u8; 16] = mask_sa.sin6_addr.__u6_addr.__u6_addr8;
-                    prefix = u128::from_be_bytes(octets).leading_ones() as u8;
-                }
-            }
-        }
-    }
-
-    Some(Route {
-        destination,
+    return Some(Route {
+        destination: destination?,
         prefix,
         gateway,
-        ifindex,
-    })
+        ifindex: Some(hdr.rtm_index as u32),
+    });
 }
 
 #[repr(C)]
@@ -238,19 +217,18 @@ unsafe fn sa_to_ip(sa: &sockaddr) -> Option<IpAddr> {
     match sa.sa_family as u32 {
         AF_INET => {
             let inet: &sockaddr_in = std::mem::transmute(sa);
-            let octets: [u8; 4] = inet.sin_addr.s_addr.to_ne_bytes();
-            Some(IpAddr::from(octets))
+            Some(IpAddr::from(inet.sin_addr.s_addr.to_ne_bytes()))
         }
         AF_INET6 => {
             let inet6: &sockaddr_in6 = std::mem::transmute(sa);
-            let octets: [u8; 16] = inet6.sin6_addr.__u6_addr.__u6_addr8;
-            Some(IpAddr::from(octets))
+            Some(IpAddr::from(inet6.sin6_addr.__u6_addr.__u6_addr8))
         }
         AF_LINK => None,
         _ => None,
     }
 }
 
+/*
 unsafe fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
     match sa.sa_family as u32 {
         AF_LINK => {
@@ -275,6 +253,7 @@ unsafe fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
         _ => None,
     }
 }
+*/
 
 async fn list_routes() -> io::Result<Vec<Route>> {
     let mut mib: [u32; 6] = [0; 6];
@@ -287,17 +266,7 @@ async fn list_routes() -> io::Result<Vec<Route>> {
     mib[4] = NET_RT_DUMP;
     // mib[5] flags: 0
 
-    if unsafe {
-        sysctl(
-            &mut mib as *mut _ as *mut _,
-            6,
-            std::ptr::null_mut(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    } < 0
-    {
+    if unsafe { sysctl(&mut mib as *mut _ as *mut _, 6, std::ptr::null_mut(), &mut len, std::ptr::null_mut(), 0) } < 0 {
         return Err(io::Error::last_os_error());
     }
 
@@ -360,13 +329,7 @@ fn code_to_error(err: i32) -> io::Error {
     io::Error::new(kind, format!("rtm_errno {}", err))
 }
 
-async fn add_or_del_route(
-    dst: IpAddr,
-    dst_mask: IpAddr,
-    gateway: Option<IpAddr>,
-    ifindex: Option<u32>,
-    add: bool,
-) -> io::Result<()> {
+async fn add_or_del_route(dst: IpAddr, dst_mask: IpAddr, gateway: Option<IpAddr>, ifindex: Option<u32>, add: bool) -> io::Result<()> {
     let mut rtm_flags = (RTF_STATIC | RTF_UP) as i32;
     // TODO not sure about this !add
     if gateway.is_some() || !add {
@@ -378,7 +341,11 @@ async fn add_or_del_route(
         rtm_addrs |= RTA_GATEWAY;
     }
 
-    let rtm_type = if add { RTM_ADD } else { RTM_DELETE } as u8;
+    let rtm_type = if add {
+        RTM_ADD
+    } else {
+        RTM_DELETE
+    } as u8;
 
     let mut rtmsg = m_rtmsg {
         hdr: rt_msghdr {
@@ -424,9 +391,7 @@ async fn add_or_del_route(
                 sin6_family: AF_INET6 as u8,
                 sin6_port: 0,
                 sin6_flowinfo: 0,
-                sin6_addr: in6_addr {
-                    __u6_addr: unsafe { std::mem::transmute(addr.octets()) },
-                },
+                sin6_addr: in6_addr { __u6_addr: unsafe { std::mem::transmute(addr.octets()) } },
                 sin6_scope_id: 0,
             };
 
@@ -446,9 +411,7 @@ async fn add_or_del_route(
                     sin_len: sa_len as u8,
                     sin_family: AF_INET as u8,
                     sin_port: 0,
-                    sin_addr: in_addr {
-                        s_addr: unsafe { std::mem::transmute(addr.octets()) },
-                    },
+                    sin_addr: in_addr { s_addr: unsafe { std::mem::transmute(addr.octets()) } },
                     sin_zero: [0i8; 8],
                 };
 
@@ -465,9 +428,7 @@ async fn add_or_del_route(
                     sin6_family: AF_INET6 as u8,
                     sin6_port: 0,
                     sin6_flowinfo: 0,
-                    sin6_addr: in6_addr {
-                        __u6_addr: unsafe { std::mem::transmute(addr.octets()) },
-                    },
+                    sin6_addr: in6_addr { __u6_addr: unsafe { std::mem::transmute(addr.octets()) } },
                     sin6_scope_id: 0,
                 };
 
@@ -503,9 +464,7 @@ async fn add_or_del_route(
                 sin_len: sa_len as u8,
                 sin_family: AF_INET as u8,
                 sin_port: 0,
-                sin_addr: in_addr {
-                    s_addr: unsafe { std::mem::transmute(addr.octets()) },
-                },
+                sin_addr: in_addr { s_addr: unsafe { std::mem::transmute(addr.octets()) } },
                 sin_zero: [0i8; 8],
             };
 
@@ -522,9 +481,7 @@ async fn add_or_del_route(
                 sin6_family: AF_INET6 as u8,
                 sin6_port: 0,
                 sin6_flowinfo: 0,
-                sin6_addr: in6_addr {
-                    __u6_addr: unsafe { std::mem::transmute(addr.octets()) },
-                },
+                sin6_addr: in6_addr { __u6_addr: unsafe { std::mem::transmute(addr.octets()) } },
                 sin6_scope_id: 0,
             };
 
