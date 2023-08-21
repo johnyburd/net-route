@@ -198,6 +198,7 @@ impl Drop for Handle {
 }
 
 unsafe impl Send for Handle {}
+unsafe impl Sync for Handle {}
 
 impl From<&Route> for MIB_IPFORWARD_ROW2 {
     fn from(route: &Route) -> Self {

@@ -1,8 +1,11 @@
-
-
-#[cfg(target_os = "macos")]
 fn main() {
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or("".to_string());
+    if target_os == "macos" {
+        build_macos();
+    }
+}
 
+fn build_macos() {
     use std::env;
     use std::path::PathBuf;
     // Tell cargo to look for shared libraries in the specified directory
@@ -35,9 +38,4 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
-}
-
-#[cfg(not(target_os = "macos"))]
-fn main() {
-
 }
