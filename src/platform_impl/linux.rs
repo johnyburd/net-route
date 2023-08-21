@@ -4,15 +4,15 @@ use std::io::{self, Error};
 use async_stream::stream;
 use futures::{channel::mpsc::UnboundedReceiver, stream::TryStreamExt};
 use futures::{Stream, StreamExt};
-use rtnetlink::packet::{route, RouteMessage, RtnlMessage};
-use rtnetlink::proto::{NetlinkMessage, NetlinkPayload};
+use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
+use netlink_packet_route::{route, RouteMessage, RtnlMessage};
+use netlink_sys::{AsyncSocket, SocketAddr};
 use std::net::IpAddr;
 use tokio::{sync::broadcast, task::JoinHandle};
 
 use rtnetlink::{
     constants::{RTMGRP_IPV4_ROUTE, RTMGRP_IPV6_ROUTE},
     new_connection,
-    sys::{AsyncSocket, SocketAddr},
 };
 
 pub struct Handle {
@@ -149,7 +149,7 @@ impl Handle {
                 let mut msg = route_handle
                     .add()
                     .v4()
-                    .table(route.table)
+                    .table_id(route.table.into())
                     .destination_prefix(addr, route.prefix);
 
                 if let Some(ifindex) = route.ifindex {
@@ -175,7 +175,7 @@ impl Handle {
                 let mut msg = route_handle
                     .add()
                     .v6()
-                    .table(route.table)
+                    .table_id(route.table.into())
                     .destination_prefix(addr, route.prefix);
 
                 if let Some(ifindex) = route.ifindex {

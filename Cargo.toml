@@ -1,6 +1,6 @@
 [package]
 name = "net-route"
-version = "0.2.4"
+version = "0.2.5"
 authors = ["Johnyburd <johnyburd8@gmail.com>"]
 
 edition = "2021"
@@ -29,7 +29,10 @@ async-stream = "0.3.3"
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rtnetlink = "0.11.0"
+rtnetlink = "0.13.1"
+netlink-sys = "0.8.5"
+netlink-packet-core = "0.7.0"
+netlink-packet-route = "0.17.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3.9", features = [
