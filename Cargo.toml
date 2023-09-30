@@ -43,7 +43,7 @@ winapi = { version = "0.3.9", features = [
 ] }
 
 [build-dependencies]
-bindgen = "0.60.1"
+bindgen = "0.68.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread"] }
