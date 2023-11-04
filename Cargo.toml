@@ -1,6 +1,6 @@
 [package]
 name = "net-route"
-version = "0.2.7"
+version = "0.2.8"
 authors = ["Johnyburd <johnyburd8@gmail.com>"]
 
 edition = "2021"
@@ -43,7 +43,7 @@ winapi = { version = "0.3.9", features = [
 ] }
 
 [build-dependencies]
-bindgen = "0.60.1"
+bindgen = "0.69.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread"] }
