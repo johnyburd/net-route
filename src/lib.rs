@@ -6,23 +6,33 @@
 //!
 //! ## Examples
 //! #### Adding a route
-//! ```
+//! ```no_run
 //! // route traffic destined for 10.14.0.0/24 to 192.1.2.1 using interface 9
+//! # use net_route::{Handle, Route};
+//! # #[tokio::main]
+//! # async fn main() -> std::io::Result<()> {
 //! let handle = Handle::new()?;
 //! let route = Route::new("10.14.0.0".parse().unwrap(), 24)
 //!     .with_ifindex(9)
-//!     .with_gateway("192.1.2.1".parse.unwrap());
+//!     .with_gateway("192.1.2.1".parse().unwrap());
 //! handle.add(&route).await
+//! # }
 //! ```
 //!
 //! #### Listening to changes in the routing table
-//! ```
+//! ```no_run
+//! # use futures::StreamExt;
+//! # use net_route::Handle;
+//! # #[tokio::main]
+//! # async fn main() -> std::io::Result<()> {
 //! let handle = Handle::new()?;
 //! let stream = handle.route_listen_stream();
 //! futures::pin_mut!(stream);
 //! while let Some(event) = stream.next().await {
-//!     println!("{:?}", value);
+//!     println!("{:?}", event);
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 use std::{
