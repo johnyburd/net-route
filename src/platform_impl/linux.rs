@@ -5,9 +5,12 @@ use async_stream::stream;
 use futures::{channel::mpsc::UnboundedReceiver, stream::TryStreamExt};
 use futures::{Stream, StreamExt};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
-use netlink_packet_route::{route, RouteMessage, RtnlMessage};
+use netlink_packet_route::{
+    route::{RouteAddress, RouteAttribute, RouteMessage},
+    AddressFamily, RouteNetlinkMessage,
+};
 use netlink_sys::{AsyncSocket, SocketAddr};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use tokio::{sync::broadcast, task::JoinHandle};
 
 use rtnetlink::{
@@ -201,14 +204,16 @@ impl Handle {
     }
 
     async fn listen(
-        mut messages: UnboundedReceiver<(NetlinkMessage<RtnlMessage>, SocketAddr)>,
+        mut messages: UnboundedReceiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>,
         tx: broadcast::Sender<RouteChange>,
     ) {
         while let Some((message, _)) = messages.next().await {
             if let NetlinkPayload::InnerMessage(msg) = message.payload {
                 match msg {
-                    RtnlMessage::NewRoute(msg) => _ = tx.send(RouteChange::Add(msg.into())),
-                    RtnlMessage::DelRoute(msg) => _ = tx.send(RouteChange::Delete(msg.into())),
+                    RouteNetlinkMessage::NewRoute(msg) => _ = tx.send(RouteChange::Add(msg.into())),
+                    RouteNetlinkMessage::DelRoute(msg) => {
+                        _ = tx.send(RouteChange::Delete(msg.into()))
+                    }
                     _ => (),
                 }
             }
@@ -223,16 +228,10 @@ impl Drop for Handle {
     }
 }
 
-fn vec_to_ip(addr: Vec<u8>) -> Option<IpAddr> {
-    match addr.len() {
-        4 => {
-            let addr: [u8; 4] = addr.try_into().unwrap();
-            Some(IpAddr::from(addr))
-        }
-        16 => {
-            let addr: [u8; 16] = addr.try_into().unwrap();
-            Some(IpAddr::from(addr))
-        }
+fn addr_to_ip(addr: RouteAddress) -> Option<IpAddr> {
+    match addr {
+        RouteAddress::Inet(addr) => Some(addr.into()),
+        RouteAddress::Inet6(addr) => Some(addr.into()),
         _ => None,
     }
 }
@@ -240,18 +239,22 @@ fn vec_to_ip(addr: Vec<u8>) -> Option<IpAddr> {
 impl From<RouteMessage> for Route {
     fn from(msg: RouteMessage) -> Self {
         let mut gateway = None;
+        let mut source = None;
         let mut destination = None;
         let mut ifindex = None;
 
-        for nla in msg.nlas {
-            match nla {
-                route::Nla::Destination(addr) => {
-                    destination = vec_to_ip(addr);
+        for attr in msg.attributes {
+            match attr {
+                RouteAttribute::Source(addr) => {
+                    source = addr_to_ip(addr);
                 }
-                route::Nla::Gateway(addr) => {
-                    gateway = vec_to_ip(addr);
+                RouteAttribute::Destination(addr) => {
+                    destination = addr_to_ip(addr);
                 }
-                route::Nla::Oif(i) => {
+                RouteAttribute::Gateway(addr) => {
+                    gateway = addr_to_ip(addr);
+                }
+                RouteAttribute::Oif(i) => {
                     ifindex = Some(i);
                 }
                 _ => {}
@@ -259,16 +262,38 @@ impl From<RouteMessage> for Route {
         }
         // rtnetlink gives None instead of 0.0.0.0 for the default route, but we'll convert to 0 here to make it match the other platforms
         let destination = destination.unwrap_or_else(|| match msg.header.address_family {
-            2 => IpAddr::from([0u8; 4]),
-            10 => IpAddr::from([0u8; 16]),
+            AddressFamily::Inet => Ipv4Addr::UNSPECIFIED.into(),
+            AddressFamily::Inet6 => Ipv6Addr::UNSPECIFIED.into(),
             _ => panic!("invalid destination family"),
         });
         Self {
             destination,
             prefix: msg.header.destination_prefix_length,
+            source,
+            source_prefix: msg.header.source_prefix_length,
             gateway,
             ifindex,
             table: msg.header.table,
         }
+    }
+}
+
+trait RouteExt {
+    fn destination_prefix(&self) -> Option<(IpAddr, u8)>;
+}
+
+impl RouteExt for RouteMessage {
+    fn destination_prefix(&self) -> Option<(IpAddr, u8)> {
+        self.attributes
+            .iter()
+            .flat_map(|attr| {
+                if let RouteAttribute::Destination(addr) = attr {
+                    addr_to_ip(addr.clone())
+                        .map(|addr| (addr, self.header.destination_prefix_length))
+                } else {
+                    None
+                }
+            })
+            .next()
     }
 }
