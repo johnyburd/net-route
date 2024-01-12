@@ -1,6 +1,6 @@
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or("".to_string());
-    if target_os == "macos" {
+    if target_os == "macos" && cfg!(docsrs) {
         build_macos();
     }
 }
@@ -27,7 +27,7 @@ fn build_macos() {
         .header("wrapper.h")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
