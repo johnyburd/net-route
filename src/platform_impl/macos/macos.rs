@@ -2,7 +2,7 @@ use std::{
     ffi::CString,
     io::{self, ErrorKind},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    os::unix::prelude::FromRawFd,
+    os::unix::prelude::FromRawFd, mem,
 };
 
 use async_stream::stream;
@@ -217,20 +217,7 @@ impl Default for sockaddr_dl {
 
 impl Default for rt_metrics {
     fn default() -> Self {
-        Self {
-            rmx_locks: 0,
-            rmx_mtu: 0,
-            rmx_hopcount: 0,
-            rmx_expire: 0,
-            rmx_recvpipe: 0,
-            rmx_sendpipe: 0,
-            rmx_ssthresh: 0,
-            rmx_rtt: 0,
-            rmx_rttvar: 0,
-            rmx_pksent: 0,
-            rmx_state: 0,
-            rmx_filler: [0u32; 3],
-        }
+        unsafe { mem::zeroed() }
     }
 }
 
