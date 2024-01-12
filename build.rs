@@ -1,6 +1,13 @@
 fn main() {
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or("".to_string());
-    if target_os == "macos" && cfg!(docsrs) {
+    // very scuffed workaround to prevent docs builds from breaking on docs.rs
+    // https://github.com/rust-lang/cargo/issues/4001
+    // https://github.com/rust-lang/docs.rs/issues/1957
+    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_default();
+    let docs_builder = target_dir == "/opt/rustwide/target";
+
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    
+    if target_os == "macos" && !docs_builder {
         build_macos();
     }
 }
