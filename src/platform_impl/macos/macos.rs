@@ -307,12 +307,12 @@ async fn list_routes() -> io::Result<Vec<Route>> {
     let mut routes = vec![];
     let mut offset = 0;
 
-    loop {
+    // Note: we need to check against the `len` that `sysctl` returned which might
+    // be smaller than the size of `msgs_buf`
+    while offset + std::mem::size_of::<rt_msghdr>() <= len {
         let buf = &mut msgs_buf[offset..];
 
-        if buf.len() < std::mem::size_of::<rt_msghdr>() {
-            break;
-        }
+        assert!(buf.len() >= std::mem::size_of::<rt_msghdr>());
 
         let rt_hdr = unsafe { std::mem::transmute::<_, &rt_msghdr>(buf.as_ptr()) };
         assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
