@@ -1,10 +1,6 @@
 fn main() {
-    // very scuffed workaround to prevent docs builds from breaking on docs.rs
-    // https://github.com/rust-lang/cargo/issues/4001
-    // https://github.com/rust-lang/docs.rs/issues/1957
-    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_default();
-    let docs_builder = target_dir == "/opt/rustwide/target";
-
+    // detect docs rs builder so we don't try to link to macos libs while cross compiling
+    let docs_builder = std::env::var("DOCS_RS").is_ok();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     
     if target_os == "macos" && !docs_builder {

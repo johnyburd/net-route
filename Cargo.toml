@@ -23,7 +23,7 @@ targets = [
 
 
 [dependencies]
-tokio = { version = "1", features = ["macros", "rt", "fs", "io-util", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "fs", "io-util", "sync", "net"] }
 futures = "0.3.24"
 async-stream = "0.3.3"
 

@@ -10,7 +10,7 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
     sync::broadcast,
-    task::JoinHandle,
+    task::JoinHandle, net::UnixStream,
 };
 
 use crate::platform_impl::macos::bind::*;
@@ -40,9 +40,10 @@ impl Handle {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        let route_fd = unsafe { File::from_raw_fd(fd) };
+        let route_fd = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        let tokio_fd: UnixStream = route_fd.try_into()?;
 
-        let listen_handle = tokio::spawn(Self::listen(tx.clone(), route_fd));
+        let listen_handle = tokio::spawn(Self::listen(tx.clone(), tokio_fd));
 
         Ok(Self { tx, listen_handle })
     }
@@ -95,7 +96,7 @@ impl Handle {
         list_routes().await
     }
 
-    async fn listen(tx: broadcast::Sender<RouteChange>, mut sock: File) {
+    async fn listen(tx: broadcast::Sender<RouteChange>, mut sock: UnixStream) {
         let mut buf = [0u8; 2048];
         loop {
             // TODO: should probably use this
