@@ -29,10 +29,10 @@ async-stream = "0.3.3"
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rtnetlink = "0.13.1"
+rtnetlink = "0.14"
 netlink-sys = "0.8.5"
 netlink-packet-core = "0.7.0"
-netlink-packet-route = "0.17.0"
+netlink-packet-route = "0.18"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winapi = { version = "0.3.9", features = [

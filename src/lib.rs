@@ -103,6 +103,14 @@ pub struct Route {
     /// The routing table this route belongs to.
     pub table: u8,
 
+    /// Network address of the source.
+    #[cfg(target_os = "linux")]
+    pub source: Option<IpAddr>,
+
+    /// Prefix length of the source address.
+    #[cfg(target_os = "linux")]
+    pub source_prefix: u8,
+
     #[cfg(target_os = "windows")]
     /// The route metric offset value for this route.
     pub metric: Option<u32>,
@@ -127,6 +135,10 @@ impl Route {
             #[cfg(target_os = "linux")]
             // default to main table
             table: 254,
+            #[cfg(target_os = "linux")]
+            source: None,
+            #[cfg(target_os = "linux")]
+            source_prefix: 0,
             #[cfg(target_os = "windows")]
             metric: None,
             #[cfg(target_os = "windows")]
