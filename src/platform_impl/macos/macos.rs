@@ -192,7 +192,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
                 // Logic again taken from route.c (see link above), function `p_sockaddr()`
                 let segs = v6gw.segments();
                 gateway = Some(IpAddr::V6(Ipv6Addr::new(
-                    segs[0], 0, segs[2], segs[3], segs[4], segs[4], segs[6], segs[7],
+                    segs[0], 0, segs[2], segs[3], segs[4], segs[5], segs[6], segs[7],
                 )))
             }
         }
