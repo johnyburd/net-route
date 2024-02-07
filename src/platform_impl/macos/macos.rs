@@ -175,6 +175,27 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
     if hdr.rtm_addrs & (1 << RTAX_GATEWAY) != 0 {
         let gw_sa = route_addresses[RTAX_GATEWAY as usize].unwrap();
         gateway = sa_to_ip(gw_sa);
+        if let Some(IpAddr::V6(v6gw)) = gateway {
+            // unicast link local start with FE80::
+            let is_unicast_ll = v6gw.segments()[0] == 0xfe80;
+            // v6 multicast starts with FF
+            let is_multicast = v6gw.octets()[0] == 0xff;
+            // lower 4 bit of byte1 encode the multicast scope
+            let multicast_scope = v6gw.octets()[1] & 0x0f;
+            // scope 1 is interface/node-local. scope 2 is link-local
+            // RFC4291, Sec. 2.7 for the gory details
+            if is_unicast_ll || (is_multicast && (multicast_scope == 1 || multicast_scope == 2)) {
+                // how fun. So it looks like some kernels encode the scope_id of the v6 address in
+                // byte 2 & 3 of the gateway IP, if it's unicast link_local, or multicast with interface-local
+                // or link-local scope. So we need to set these two bytes to 0 to turn it into the
+                // real gateway address
+                // Logic again taken from route.c (see link above), function `p_sockaddr()`
+                let segs = v6gw.segments();
+                gateway = Some(IpAddr::V6(Ipv6Addr::new(
+                    segs[0], 0, segs[2], segs[3], segs[4], segs[4], segs[6], segs[7],
+                )))
+            }
+        }
     }
 
     // check if message has netmask
