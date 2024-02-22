@@ -102,10 +102,10 @@ impl Handle {
     async fn listen(tx: broadcast::Sender<RouteChange>, mut sock: UnixStream) {
         let mut buf = [0u8; 2048];
         loop {
-            // TODO: should probably use this
             let read = sock.read(&mut buf).await.expect("sock read err");
             assert!(read > 0);
             // NOTE: we don't know it's safe to read past type yet!
+            // https://man.freebsd.org/cgi/man.cgi?query=route&apropos=0&sektion=4&manpath=FreeBSD+7.2-RELEASE&format=html
             let hdr: &rt_msghdr = unsafe { mem::transmute(buf.as_mut_ptr()) };
             if !matches!(hdr.rtm_type as u32, RTM_ADD | RTM_DELETE | RTM_CHANGE) {
                 continue;
