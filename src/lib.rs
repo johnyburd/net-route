@@ -115,7 +115,7 @@ pub struct Route {
     #[cfg(target_os = "linux")]
     pub source_hint: Option<IpAddr>,
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     /// The route metric offset value for this route.
     pub metric: Option<u32>,
 
@@ -145,7 +145,7 @@ impl Route {
             source_prefix: 0,
             #[cfg(target_os = "linux")]
             source_hint: None,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             metric: None,
             #[cfg(target_os = "windows")]
             luid: None,
@@ -187,7 +187,7 @@ impl Route {
     }
 
     /// Set route metric.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub fn with_metric(mut self, metric: u32) -> Self {
         self.metric = Some(metric);
         self
