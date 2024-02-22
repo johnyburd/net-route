@@ -8,7 +8,6 @@ use std::{
 
 use async_stream::stream;
 use tokio::{
-    fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
     sync::broadcast,
     task::JoinHandle, net::UnixStream,
@@ -105,13 +104,15 @@ impl Handle {
         loop {
             // TODO: should probably use this
             let read = sock.read(&mut buf).await.expect("sock read err");
-            let hdr: &rt_msghdr;
-            let hdr_size = std::mem::size_of::<rt_msghdr>();
-            assert!(read >= hdr_size);
-            let route = unsafe {
-                hdr = std::mem::transmute(buf.as_mut_ptr());
-                message_to_route(hdr, &buf[hdr_size..read])
-            };
+            assert!(read > 0);
+            // NOTE: we don't know it's safe to read past type yet!
+            let hdr: &rt_msghdr = unsafe { mem::transmute(buf.as_mut_ptr()) };
+            if !matches!(hdr.rtm_type as u32, RTM_ADD | RTM_DELETE | RTM_CHANGE) {
+                continue;
+            }
+            const HDR_SIZE: usize = mem::size_of::<rt_msghdr>();
+            assert!(read >= HDR_SIZE);
+            let route = message_to_route(hdr, &buf[HDR_SIZE..read]);
 
             if let Some(route) = route {
                 _ = tx.send(match hdr.rtm_type as u32 {
@@ -149,6 +150,9 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
     for idx in 0..RTAX_MAX as usize {
         if hdr.rtm_addrs & (1 << idx) != 0 {
             let buf = &msg[cur_pos..];
+            if buf.len() < mem::size_of::<sockaddr>() {
+                continue;
+            }
             assert!(buf.len() >= std::mem::size_of::<sockaddr>());
             let sa: &sockaddr = unsafe { &*(buf.as_ptr() as *const sockaddr) };
             assert!(buf.len() >= sa.sa_len as usize);
@@ -201,13 +205,12 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
 
     // check if message has netmask
     if hdr.rtm_addrs & (1 << RTAX_NETMASK) != 0 {
-        let sa = route_addresses[RTAX_NETMASK as usize].unwrap();
-        if sa.sa_len == 0 {
+        match route_addresses[RTAX_NETMASK as usize] {
+            None => prefix = 0,
             // Yes, apparently a 0 prefixlen is encoded as having an sa_len of 0
             // (at least in some cases).
-            prefix = 0;
-        } else {
-            match destination {
+            Some(sa) if sa.sa_len == 0 => prefix = 0,
+            Some(sa) => match destination {
                 IpAddr::V4(_) => {
                     let mask_sa: &sockaddr_in = unsafe { std::mem::transmute(sa) };
                     prefix = u32::from_be(mask_sa.sin_addr.s_addr).leading_ones() as u8;
@@ -569,7 +572,7 @@ async fn add_or_del_route(
     let msg_len = std::mem::size_of::<rt_msghdr>() + attr_offset;
     rtmsg.hdr.rtm_msglen = msg_len as u16;
 
-    let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, 0) };
+    let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, AF_INET as i32) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -579,7 +582,8 @@ async fn add_or_del_route(
         let len = rtmsg.hdr.rtm_msglen as usize;
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
-    let mut f = unsafe { File::from_raw_fd(fd) };
+    let route_fd = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    let mut f: UnixStream = route_fd.try_into()?;
 
     f.write_all(slice).await?;
 
