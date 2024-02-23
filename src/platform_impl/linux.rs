@@ -170,6 +170,30 @@ impl Handle {
                         }
                     };
                 }
+
+                if let Some(src_hint) = route.source_hint {
+                    msg = match src_hint {
+                        IpAddr::V4(addr) => msg.pref_source(addr),
+                        IpAddr::V6(_) => {
+                            return Err(Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "source hint version must match destination",
+                            ))
+                        }
+                    };
+                }
+
+                if let Some(src) = route.source {
+                    msg = match src {
+                        IpAddr::V4(addr) => msg.source_prefix(addr, route.source_prefix),
+                        IpAddr::V6(_) => {
+                            return Err(Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "source version must match destination",
+                            ))
+                        }
+                    };
+                }
                 msg.execute()
                     .await
                     .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
@@ -192,6 +216,30 @@ impl Handle {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidInput,
                                 "gateway version must match destination",
+                            ))
+                        }
+                    };
+                }
+
+                if let Some(src_hint) = route.source_hint {
+                    msg = match src_hint {
+                        IpAddr::V6(addr) => msg.pref_source(addr),
+                        IpAddr::V4(_) => {
+                            return Err(Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "source hint version must match destination",
+                            ))
+                        }
+                    };
+                }
+
+                if let Some(src) = route.source {
+                    msg = match src {
+                        IpAddr::V6(addr) => msg.source_prefix(addr, route.source_prefix),
+                        IpAddr::V4(_) => {
+                            return Err(Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "source version must match destination",
                             ))
                         }
                     };
@@ -240,6 +288,7 @@ impl From<RouteMessage> for Route {
     fn from(msg: RouteMessage) -> Self {
         let mut gateway = None;
         let mut source = None;
+        let mut source_hint = None;
         let mut destination = None;
         let mut ifindex = None;
 
@@ -247,6 +296,9 @@ impl From<RouteMessage> for Route {
             match attr {
                 RouteAttribute::Source(addr) => {
                     source = addr_to_ip(addr);
+                }
+                RouteAttribute::PrefSource(addr) => {
+                    source_hint = addr_to_ip(addr);
                 }
                 RouteAttribute::Destination(addr) => {
                     destination = addr_to_ip(addr);
@@ -271,6 +323,7 @@ impl From<RouteMessage> for Route {
             prefix: msg.header.destination_prefix_length,
             source,
             source_prefix: msg.header.source_prefix_length,
+            source_hint,
             gateway,
             ifindex,
             table: msg.header.table,

@@ -111,6 +111,10 @@ pub struct Route {
     #[cfg(target_os = "linux")]
     pub source_prefix: u8,
 
+    /// Source address hint. Does not influence routing.
+    #[cfg(target_os = "linux")]
+    pub source_hint: Option<IpAddr>,
+
     #[cfg(target_os = "windows")]
     /// The route metric offset value for this route.
     pub metric: Option<u32>,
@@ -139,6 +143,8 @@ impl Route {
             source: None,
             #[cfg(target_os = "linux")]
             source_prefix: 0,
+            #[cfg(target_os = "linux")]
+            source_hint: None,
             #[cfg(target_os = "windows")]
             metric: None,
             #[cfg(target_os = "windows")]
@@ -162,6 +168,21 @@ impl Route {
     #[cfg(target_os = "linux")]
     pub fn with_table(mut self, table: u8) -> Self {
         self.table = table;
+        self
+    }
+
+    /// Set source.
+    #[cfg(target_os = "linux")]
+    pub fn with_source(mut self, source: IpAddr, prefix: u8) -> Self {
+        self.source = Some(source);
+        self.source_prefix = prefix;
+        self
+    }
+
+    /// Set source hint.
+    #[cfg(target_os = "linux")]
+    pub fn with_source_hint(mut self, hint: IpAddr) -> Self {
+        self.source_hint = Some(hint);
         self
     }
 
