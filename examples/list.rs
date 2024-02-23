@@ -6,10 +6,14 @@ async fn main() -> std::io::Result<()> {
     let routes = handle.list().await?;
 
     for route in routes {
-
         println!(
-            "{}/{} -> via {:?} dev {:?}",
-            route.destination, route.prefix, route.gateway, route.ifindex
+            "{}/{} -> via {:?} dev {:?} src {:?}/{}",
+            route.destination,
+            route.prefix,
+            route.gateway,
+            route.ifindex,
+            route.source,
+            route.source_prefix,
         );
     }
     Ok(())
