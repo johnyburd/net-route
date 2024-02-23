@@ -1,20 +1,23 @@
 use std::{
     ffi::CString,
     io::{self, ErrorKind},
+    mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    os::unix::prelude::FromRawFd, mem,
+    os::unix::prelude::FromRawFd,
 };
 
 use async_stream::stream;
 use tokio::{
-    fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
     sync::broadcast,
-    task::JoinHandle,
+    task::JoinHandle, net::UnixStream,
 };
 
 use crate::platform_impl::macos::bind::*;
 use crate::{Route, RouteChange};
+
+// see https://opensource.apple.com/source/network_cmds/network_cmds-606.40.2/netstat.tproj/route.c.auto.html
+// for example C code of how the MacOS route API works.
 
 pub fn ifname_to_index(name: &str) -> Option<u32> {
     let name = CString::new(name).ok()?;
@@ -40,9 +43,10 @@ impl Handle {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        let route_fd = unsafe { File::from_raw_fd(fd) };
+        let route_fd = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        let tokio_fd: UnixStream = route_fd.try_into()?;
 
-        let listen_handle = tokio::spawn(Self::listen(tx.clone(), route_fd));
+        let listen_handle = tokio::spawn(Self::listen(tx.clone(), tokio_fd));
 
         Ok(Self { tx, listen_handle })
     }
@@ -95,17 +99,20 @@ impl Handle {
         list_routes().await
     }
 
-    async fn listen(tx: broadcast::Sender<RouteChange>, mut sock: File) {
+    async fn listen(tx: broadcast::Sender<RouteChange>, mut sock: UnixStream) {
         let mut buf = [0u8; 2048];
         loop {
-            // TODO: should probably use this
-            let _read = sock.read(&mut buf).await.expect("sock read err");
-            let hdr: &rt_msghdr;
-            let route = unsafe {
-                hdr = std::mem::transmute(buf.as_mut_ptr());
-                let msg = (hdr as *const rt_msghdr).add(1) as *mut u8;
-                message_to_route(hdr, msg)
-            };
+            let read = sock.read(&mut buf).await.expect("sock read err");
+            assert!(read > 0);
+            // NOTE: we don't know it's safe to read past type yet!
+            // https://man.freebsd.org/cgi/man.cgi?query=route&apropos=0&sektion=4&manpath=FreeBSD+7.2-RELEASE&format=html
+            let hdr: &rt_msghdr = unsafe { mem::transmute(buf.as_mut_ptr()) };
+            if !matches!(hdr.rtm_type as u32, RTM_ADD | RTM_DELETE | RTM_CHANGE) {
+                continue;
+            }
+            const HDR_SIZE: usize = mem::size_of::<rt_msghdr>();
+            assert!(read >= HDR_SIZE);
+            let route = message_to_route(hdr, &buf[HDR_SIZE..read]);
 
             if let Some(route) = route {
                 _ = tx.send(match hdr.rtm_type as u32 {
@@ -125,20 +132,44 @@ impl Drop for Handle {
     }
 }
 
-fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
-    let destination;
+fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
     let mut gateway = None;
-    let mut ifindex = None;
 
     // check if message has no destination
     if hdr.rtm_addrs & (1 << RTAX_DST) == 0 {
         return None;
     }
 
-    unsafe {
-        let dst_sa: &sockaddr = std::mem::transmute((msg as *mut sockaddr).add(RTAX_DST as usize));
-        destination = sa_to_ip(dst_sa)?;
+    // The body of the route message (msg) is a list of `struct sockaddr`. However, thanks to v6,
+    // the size
+
+    // See https://opensource.apple.com/source/network_cmds/network_cmds-606.40.2/netstat.tproj/route.c.auto.html,
+    // function `get_rtaddrs()`
+    let mut route_addresses = [None; RTAX_MAX as usize];
+    let mut cur_pos = 0;
+    for idx in 0..RTAX_MAX as usize {
+        if hdr.rtm_addrs & (1 << idx) != 0 {
+            let buf = &msg[cur_pos..];
+            if buf.len() < mem::size_of::<sockaddr>() {
+                continue;
+            }
+            assert!(buf.len() >= std::mem::size_of::<sockaddr>());
+            let sa: &sockaddr = unsafe { &*(buf.as_ptr() as *const sockaddr) };
+            assert!(buf.len() >= sa.sa_len as usize);
+            route_addresses[idx] = Some(sa);
+
+            // see ROUNDUP() macro in the route.c file linked above.
+            // The len needs to be a multiple of 4bytes
+            let aligned_len = if sa.sa_len == 0 {
+                4
+            } else {
+                ((sa.sa_len - 1) | 0x3) + 1
+            };
+            cur_pos += aligned_len as usize;
+        }
     }
+
+    let destination = sa_to_ip(route_addresses[RTAX_DST as usize].unwrap())?;
 
     let mut prefix = match destination {
         IpAddr::V4(_) => 32,
@@ -147,38 +178,49 @@ fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
 
     // check if message has a gateway
     if hdr.rtm_addrs & (1 << RTAX_GATEWAY) != 0 {
-        unsafe {
-            //let gw_sa: &sockaddr = std::mem::transmute(msg);
-            let gw_sa: &sockaddr =
-                std::mem::transmute((msg as *mut sockaddr).add(RTAX_GATEWAY as usize));
-
-            // try to convert sockaddr to ip
-            gateway = sa_to_ip(gw_sa);
-            // if that fails try to convert it to a link
-            if gateway.is_none() {
-                if let Some((_mac, ifidx)) = sa_to_link(gw_sa) {
-                    // TODO do something with mac?
-                    ifindex = Some(ifidx as u32);
-                }
+        let gw_sa = route_addresses[RTAX_GATEWAY as usize].unwrap();
+        gateway = sa_to_ip(gw_sa);
+        if let Some(IpAddr::V6(v6gw)) = gateway {
+            // unicast link local start with FE80::
+            let is_unicast_ll = v6gw.segments()[0] == 0xfe80;
+            // v6 multicast starts with FF
+            let is_multicast = v6gw.octets()[0] == 0xff;
+            // lower 4 bit of byte1 encode the multicast scope
+            let multicast_scope = v6gw.octets()[1] & 0x0f;
+            // scope 1 is interface/node-local. scope 2 is link-local
+            // RFC4291, Sec. 2.7 for the gory details
+            if is_unicast_ll || (is_multicast && (multicast_scope == 1 || multicast_scope == 2)) {
+                // how fun. So it looks like some kernels encode the scope_id of the v6 address in
+                // byte 2 & 3 of the gateway IP, if it's unicast link_local, or multicast with interface-local
+                // or link-local scope. So we need to set these two bytes to 0 to turn it into the
+                // real gateway address
+                // Logic again taken from route.c (see link above), function `p_sockaddr()`
+                let segs = v6gw.segments();
+                gateway = Some(IpAddr::V6(Ipv6Addr::new(
+                    segs[0], 0, segs[2], segs[3], segs[4], segs[5], segs[6], segs[7],
+                )))
             }
         }
     }
 
     // check if message has netmask
     if hdr.rtm_addrs & (1 << RTAX_NETMASK) != 0 {
-        unsafe {
-            match destination {
+        match route_addresses[RTAX_NETMASK as usize] {
+            None => prefix = 0,
+            // Yes, apparently a 0 prefixlen is encoded as having an sa_len of 0
+            // (at least in some cases).
+            Some(sa) if sa.sa_len == 0 => prefix = 0,
+            Some(sa) => match destination {
                 IpAddr::V4(_) => {
-                    let mask_sa: &sockaddr_in =
-                        std::mem::transmute((msg as *mut sockaddr).add(RTAX_NETMASK as usize));
-                    let octets: [u8; 4] = mask_sa.sin_addr.s_addr.to_ne_bytes();
-                    prefix = u32::from_be_bytes(octets).leading_ones() as u8;
+                    let mask_sa: &sockaddr_in = unsafe { std::mem::transmute(sa) };
+                    prefix = u32::from_be(mask_sa.sin_addr.s_addr).leading_ones() as u8;
                 }
                 IpAddr::V6(_) => {
-                    let mask_sa: &sockaddr_in6 =
-                        std::mem::transmute((msg as *mut sockaddr).add(RTAX_NETMASK as usize));
-                    let octets: [u8; 16] = mask_sa.sin6_addr.__u6_addr.__u6_addr8;
-                    prefix = u128::from_be_bytes(octets).leading_ones() as u8;
+                    let mask_sa: &sockaddr_in6 = unsafe { std::mem::transmute(sa) };
+                    // sin6_addr.__u6_addr is a union that represents the 16 v6 bytes either as
+                    // 16 u8's or 16 u16's or 4 u32's. So we need the unsafe here because of the union
+                    prefix = u128::from_be_bytes(unsafe { mask_sa.sin6_addr.__u6_addr.__u6_addr8 })
+                        .leading_ones() as u8;
                 }
             }
         }
@@ -188,7 +230,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: *mut u8) -> Option<Route> {
         destination,
         prefix,
         gateway,
-        ifindex,
+        ifindex: Some(hdr.rtm_index as u32),
     })
 }
 
@@ -221,16 +263,18 @@ impl Default for rt_metrics {
     }
 }
 
-unsafe fn sa_to_ip(sa: &sockaddr) -> Option<IpAddr> {
+fn sa_to_ip(sa: &sockaddr) -> Option<IpAddr> {
     match sa.sa_family as u32 {
         AF_INET => {
-            let inet: &sockaddr_in = std::mem::transmute(sa);
+            assert!(sa.sa_len as usize >= std::mem::size_of::<sockaddr_in>());
+            let inet: &sockaddr_in = unsafe { std::mem::transmute(sa) };
             let octets: [u8; 4] = inet.sin_addr.s_addr.to_ne_bytes();
             Some(IpAddr::from(octets))
         }
         AF_INET6 => {
-            let inet6: &sockaddr_in6 = std::mem::transmute(sa);
-            let octets: [u8; 16] = inet6.sin6_addr.__u6_addr.__u6_addr8;
+            assert!(sa.sa_len as usize >= std::mem::size_of::<sockaddr_in6>());
+            let inet6: &sockaddr_in6 = unsafe { std::mem::transmute(sa) };
+            let octets: [u8; 16] = unsafe { inet6.sin6_addr.__u6_addr.__u6_addr8 };
             Some(IpAddr::from(octets))
         }
         AF_LINK => None,
@@ -238,10 +282,12 @@ unsafe fn sa_to_ip(sa: &sockaddr) -> Option<IpAddr> {
     }
 }
 
-unsafe fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
+#[allow(dead_code)] // currently unused but lets leave it in since it might come in handy
+fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
     match sa.sa_family as u32 {
         AF_LINK => {
-            let sa_dl = sa as *const _ as *const sockaddr_dl;
+            assert!(sa.sa_len as usize >= std::mem::size_of::<sockaddr_dl>());
+            let sa_dl: &sockaddr_dl = unsafe { std::mem::transmute(sa) };
             let ifindex = (*sa_dl).sdl_index;
             let mac;
             if (*sa_dl).sdl_alen == 6 {
@@ -328,7 +374,7 @@ async fn list_routes() -> io::Result<Vec<Route>> {
         }
         let rt_msg = &mut buf[std::mem::size_of::<rt_msghdr>()..msg_len];
 
-        if let Some(route) = message_to_route(rt_hdr, rt_msg.as_mut_ptr()) {
+        if let Some(route) = message_to_route(rt_hdr, rt_msg) {
             routes.push(route);
         }
     }
@@ -526,7 +572,7 @@ async fn add_or_del_route(
     let msg_len = std::mem::size_of::<rt_msghdr>() + attr_offset;
     rtmsg.hdr.rtm_msglen = msg_len as u16;
 
-    let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, 0) };
+    let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, AF_INET as i32) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -536,7 +582,8 @@ async fn add_or_del_route(
         let len = rtmsg.hdr.rtm_msglen as usize;
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
-    let mut f = unsafe { File::from_raw_fd(fd) };
+    let route_fd = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    let mut f: UnixStream = route_fd.try_into()?;
 
     f.write_all(slice).await?;
 
