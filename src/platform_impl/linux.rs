@@ -129,7 +129,10 @@ impl Handle {
             .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
         {
             let other_route: Route = msg.clone().into();
-            if other_route.destination == route.destination && other_route.prefix == route.prefix {
+            if other_route.destination == route.destination
+                && other_route.prefix == route.prefix
+                && other_route.metric == route.metric
+            {
                 route_handle
                     .del(msg)
                     .execute()
@@ -157,6 +160,10 @@ impl Handle {
 
                 if let Some(ifindex) = route.ifindex {
                     msg = msg.output_interface(ifindex);
+                }
+
+                if let Some(metric) = route.metric {
+                    msg = msg.priority(metric);
                 }
 
                 if let Some(gateway) = route.gateway {
@@ -207,6 +214,10 @@ impl Handle {
 
                 if let Some(ifindex) = route.ifindex {
                     msg = msg.output_interface(ifindex);
+                }
+
+                if let Some(metric) = route.metric {
+                    msg = msg.priority(metric);
                 }
 
                 if let Some(gateway) = route.gateway {
@@ -291,6 +302,7 @@ impl From<RouteMessage> for Route {
         let mut source_hint = None;
         let mut destination = None;
         let mut ifindex = None;
+        let mut metric = None;
 
         for attr in msg.attributes {
             match attr {
@@ -308,6 +320,9 @@ impl From<RouteMessage> for Route {
                 }
                 RouteAttribute::Oif(i) => {
                     ifindex = Some(i);
+                }
+                route::Nla::Priority(priority) => {
+                    metric = Some(priority);
                 }
                 _ => {}
             }
@@ -327,6 +342,7 @@ impl From<RouteMessage> for Route {
             gateway,
             ifindex,
             table: msg.header.table,
+            metric,
         }
     }
 }
