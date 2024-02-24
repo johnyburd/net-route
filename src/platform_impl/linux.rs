@@ -321,7 +321,7 @@ impl From<RouteMessage> for Route {
                 RouteAttribute::Oif(i) => {
                     ifindex = Some(i);
                 }
-                route::Nla::Priority(priority) => {
+                RouteAttribute::Priority(priority) => {
                     metric = Some(priority);
                 }
                 _ => {}
