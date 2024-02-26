@@ -39,7 +39,7 @@ impl Handle {
         // TODO wait until user registers a listener to open the socket
         let (tx, _) = broadcast::channel::<RouteChange>(16);
 
-        let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, 0) };
+        let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, AF_UNSPEC as i32) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -572,7 +572,7 @@ async fn add_or_del_route(
     let msg_len = std::mem::size_of::<rt_msghdr>() + attr_offset;
     rtmsg.hdr.rtm_msglen = msg_len as u16;
 
-    let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, AF_INET as i32) };
+    let fd = unsafe { socket(PF_ROUTE as i32, SOCK_RAW as i32, AF_UNSPEC as i32) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
