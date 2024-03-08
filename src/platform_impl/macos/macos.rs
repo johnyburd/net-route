@@ -44,6 +44,7 @@ impl Handle {
             return Err(io::Error::last_os_error());
         }
         let route_fd = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        route_fd.set_nonblocking(true)?;
         let tokio_fd: UnixStream = route_fd.try_into()?;
 
         let listen_handle = tokio::spawn(Self::listen(tx.clone(), tokio_fd));
