@@ -9,8 +9,9 @@ use std::{
 use async_stream::stream;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
+    net::UnixStream,
     sync::broadcast,
-    task::JoinHandle, net::UnixStream,
+    task::JoinHandle,
 };
 
 use crate::platform_impl::macos::bind::*;
@@ -223,7 +224,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
                     prefix = u128::from_be_bytes(unsafe { mask_sa.sin6_addr.__u6_addr.__u6_addr8 })
                         .leading_ones() as u8;
                 }
-            }
+            },
         }
     }
 
@@ -310,46 +311,63 @@ fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
     }
 }
 
+fn try_get_msg_buf() -> io::Result<(Vec<u8>, usize)> {
+    const MAX_RETRYS: usize = 3;
+
+    for _ in 0..MAX_RETRYS {
+        let mut mib: [u32; 6] = [0; 6];
+        let mut len = 0;
+
+        mib[0] = CTL_NET;
+        mib[1] = AF_ROUTE;
+        mib[2] = 0;
+        mib[3] = 0; // family: ipv4 & ipv6
+        mib[4] = NET_RT_DUMP;
+        // mib[5] flags: 0
+
+        // see: https://github.com/golang/net/blob/ec05fdcd71141c885f3fb84c41d1c692f094ccbe/route/route.go#L126
+        if unsafe {
+            sysctl(
+                &mut mib as *mut _ as *mut _,
+                6,
+                std::ptr::null_mut(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut msgs_buf: Vec<u8> = vec![0; len as usize];
+
+        if unsafe {
+            sysctl(
+                &mut mib as *mut _ as *mut _,
+                6,
+                msgs_buf.as_mut_ptr() as _,
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        } < 0
+        {
+            // will retry return error if
+            continue;
+        } else {
+            return Ok((msgs_buf, len));
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        "Failed to get routing table",
+    ))
+}
+
 async fn list_routes() -> io::Result<Vec<Route>> {
-    let mut mib: [u32; 6] = [0; 6];
-    let mut len = 0;
-
-    mib[0] = CTL_NET;
-    mib[1] = AF_ROUTE;
-    mib[2] = 0;
-    mib[3] = 0; // family: ipv4 & ipv6
-    mib[4] = NET_RT_DUMP;
-    // mib[5] flags: 0
-
-    if unsafe {
-        sysctl(
-            &mut mib as *mut _ as *mut _,
-            6,
-            std::ptr::null_mut(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    } < 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-
-    let mut msgs_buf: Vec<u8> = vec![0; len as usize];
-
-    if unsafe {
-        sysctl(
-            &mut mib as *mut _ as *mut _,
-            6,
-            msgs_buf.as_mut_ptr() as _,
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    } < 0
-    {
-        return Err(io::Error::last_os_error());
-    }
+    let (mut msgs_buf, len) = try_get_msg_buf()?;
 
     let mut routes = vec![];
     let mut offset = 0;
