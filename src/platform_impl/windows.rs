@@ -141,17 +141,14 @@ impl Handle {
     }
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
-        for route in self.list().await? {
-            if (route.destination == Ipv4Addr::UNSPECIFIED
+        let mut list = self.list().await?;
+        list.retain(|route| (route.destination == Ipv4Addr::UNSPECIFIED
                 || route.destination == Ipv6Addr::UNSPECIFIED)
                 && route.prefix == 0
                 && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-                && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
-            {
-                return Ok(Some(route));
-            }
-        }
-        Ok(None)
+                && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+        list.sort_by(|a, b| a.metric.cmp(&b.metric));
+        Ok(list.into_iter().next())
     }
 
     pub(crate) async fn list(&self) -> io::Result<Vec<Route>> {
