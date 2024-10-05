@@ -108,7 +108,7 @@ impl Handle {
             assert!(read > 0);
             // NOTE: we don't know it's safe to read past type yet!
             // https://man.freebsd.org/cgi/man.cgi?query=route&apropos=0&sektion=4&manpath=FreeBSD+7.2-RELEASE&format=html
-            let hdr: &rt_msghdr = unsafe { mem::transmute(buf.as_mut_ptr()) };
+            let hdr: &rt_msghdr = unsafe { &*(buf.as_mut_ptr() as *const rt_msghdr) };
             if !matches!(hdr.rtm_type as u32, RTM_ADD | RTM_DELETE | RTM_CHANGE) {
                 continue;
             }
@@ -149,7 +149,11 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
     // function `get_rtaddrs()`
     let mut route_addresses = [None; RTAX_MAX as usize];
     let mut cur_pos = 0;
-    for idx in 0..RTAX_MAX as usize {
+    for (idx, item) in route_addresses
+        .iter_mut()
+        .enumerate()
+        .take(RTAX_MAX as usize)
+    {
         if hdr.rtm_addrs & (1 << idx) != 0 {
             let buf = &msg[cur_pos..];
             if buf.len() < mem::size_of::<sockaddr>() {
@@ -158,7 +162,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
             assert!(buf.len() >= std::mem::size_of::<sockaddr>());
             let sa: &sockaddr = unsafe { &*(buf.as_ptr() as *const sockaddr) };
             assert!(buf.len() >= sa.sa_len as usize);
-            route_addresses[idx] = Some(sa);
+            *item = Some(sa);
 
             // see ROUNDUP() macro in the route.c file linked above.
             // The len needs to be a multiple of 4bytes
@@ -290,21 +294,21 @@ fn sa_to_link(sa: &sockaddr) -> Option<(Option<[u8; 6]>, u16)> {
         AF_LINK => {
             assert!(sa.sa_len as usize >= std::mem::size_of::<sockaddr_dl>());
             let sa_dl: &sockaddr_dl = unsafe { std::mem::transmute(sa) };
-            let ifindex = (*sa_dl).sdl_index;
-            let mac;
-            if (*sa_dl).sdl_alen == 6 {
-                let i = (*sa_dl).sdl_nlen as usize;
+            let ifindex = sa_dl.sdl_index;
+            let mac = if sa_dl.sdl_alen == 6 {
+                let i = sa_dl.sdl_nlen as usize;
 
-                let a = (*sa_dl).sdl_data[i + 0] as u8;
-                let b = (*sa_dl).sdl_data[i + 1] as u8;
-                let c = (*sa_dl).sdl_data[i + 2] as u8;
-                let d = (*sa_dl).sdl_data[i + 3] as u8;
-                let e = (*sa_dl).sdl_data[i + 4] as u8;
-                let f = (*sa_dl).sdl_data[i + 5] as u8;
-                mac = Some([a, b, c, d, e, f]);
+                #[allow(clippy::identity_op)]
+                let a = sa_dl.sdl_data[i + 0] as u8;
+                let b = sa_dl.sdl_data[i + 1] as u8;
+                let c = sa_dl.sdl_data[i + 2] as u8;
+                let d = sa_dl.sdl_data[i + 3] as u8;
+                let e = sa_dl.sdl_data[i + 4] as u8;
+                let f = sa_dl.sdl_data[i + 5] as u8;
+                Some([a, b, c, d, e, f])
             } else {
-                mac = None;
-            }
+                None
+            };
             Some((mac, ifindex))
         }
         _ => None,
@@ -340,7 +344,7 @@ fn try_get_msg_buf() -> io::Result<(Vec<u8>, usize)> {
             return Err(io::Error::last_os_error());
         }
 
-        let mut msgs_buf: Vec<u8> = vec![0; len as usize];
+        let mut msgs_buf: Vec<u8> = vec![0; len];
 
         if unsafe {
             sysctl(
@@ -379,7 +383,7 @@ async fn list_routes() -> io::Result<Vec<Route>> {
 
         assert!(buf.len() >= std::mem::size_of::<rt_msghdr>());
 
-        let rt_hdr = unsafe { std::mem::transmute::<_, &rt_msghdr>(buf.as_ptr()) };
+        let rt_hdr = unsafe { &*buf.as_ptr().cast::<rt_msghdr>() };
         assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
         if rt_hdr.rtm_errno != 0 {
             return Err(code_to_error(rt_hdr.rtm_errno));
@@ -459,13 +463,13 @@ async fn add_or_del_route(
                 sin_len: sa_len as u8,
                 sin_family: AF_INET as u8,
                 sin_port: 0,
-                sin_addr: unsafe { std::mem::transmute(addr.octets()) },
+                sin_addr: unsafe { std::mem::transmute::<[u8; 4], in_addr>(addr.octets()) },
                 sin_zero: [0i8; 8],
             };
 
             let sa_ptr = &sa_in as *const sockaddr_in as *const u8;
             let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
-            (&mut rtmsg.attrs[..sa_len]).copy_from_slice(sa_bytes);
+            rtmsg.attrs[..sa_len].copy_from_slice(sa_bytes);
 
             attr_offset += sa_len;
         }
@@ -477,14 +481,16 @@ async fn add_or_del_route(
                 sin6_port: 0,
                 sin6_flowinfo: 0,
                 sin6_addr: in6_addr {
-                    __u6_addr: unsafe { std::mem::transmute(addr.octets()) },
+                    __u6_addr: unsafe {
+                        std::mem::transmute::<[u8; 16], in6_addr__bindgen_ty_1>(addr.octets())
+                    },
                 },
                 sin6_scope_id: 0,
             };
 
             let sa_ptr = &sa_in as *const sockaddr_in6 as *const u8;
             let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
-            (&mut rtmsg.attrs[..sa_len]).copy_from_slice(sa_bytes);
+            rtmsg.attrs[..sa_len].copy_from_slice(sa_bytes);
 
             attr_offset += sa_len;
         }
@@ -499,14 +505,14 @@ async fn add_or_del_route(
                     sin_family: AF_INET as u8,
                     sin_port: 0,
                     sin_addr: in_addr {
-                        s_addr: unsafe { std::mem::transmute(addr.octets()) },
+                        s_addr: unsafe { std::mem::transmute::<[u8; 4], u32>(addr.octets()) },
                     },
                     sin_zero: [0i8; 8],
                 };
 
                 let sa_ptr = &sa_in as *const sockaddr_in as *const u8;
                 let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
-                (&mut rtmsg.attrs[attr_offset..attr_offset + sa_len]).copy_from_slice(sa_bytes);
+                rtmsg.attrs[attr_offset..attr_offset + sa_len].copy_from_slice(sa_bytes);
 
                 attr_offset += sa_len;
             }
@@ -518,14 +524,16 @@ async fn add_or_del_route(
                     sin6_port: 0,
                     sin6_flowinfo: 0,
                     sin6_addr: in6_addr {
-                        __u6_addr: unsafe { std::mem::transmute(addr.octets()) },
+                        __u6_addr: unsafe {
+                            std::mem::transmute::<[u8; 16], in6_addr__bindgen_ty_1>(addr.octets())
+                        },
                     },
                     sin6_scope_id: 0,
                 };
 
                 let sa_ptr = &sa_in as *const sockaddr_in6 as *const u8;
                 let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
-                (&mut rtmsg.attrs[attr_offset..attr_offset + sa_len]).copy_from_slice(sa_bytes);
+                rtmsg.attrs[attr_offset..attr_offset + sa_len].copy_from_slice(sa_bytes);
 
                 attr_offset += sa_len;
             }
@@ -543,7 +551,7 @@ async fn add_or_del_route(
 
         let sa_ptr = &sa_dl as *const sockaddr_dl as *const u8;
         let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sdl_len) };
-        (&mut rtmsg.attrs[attr_offset..attr_offset + sdl_len]).copy_from_slice(sa_bytes);
+        rtmsg.attrs[attr_offset..attr_offset + sdl_len].copy_from_slice(sa_bytes);
 
         attr_offset += sdl_len;
     }
@@ -556,14 +564,14 @@ async fn add_or_del_route(
                 sin_family: AF_INET as u8,
                 sin_port: 0,
                 sin_addr: in_addr {
-                    s_addr: unsafe { std::mem::transmute(addr.octets()) },
+                    s_addr: unsafe { std::mem::transmute::<[u8; 4], u32>(addr.octets()) },
                 },
                 sin_zero: [0i8; 8],
             };
 
             let sa_ptr = &sa_in as *const sockaddr_in as *const u8;
             let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
-            (&mut rtmsg.attrs[attr_offset..attr_offset + sa_len]).copy_from_slice(sa_bytes);
+            rtmsg.attrs[attr_offset..attr_offset + sa_len].copy_from_slice(sa_bytes);
 
             attr_offset += sa_len;
         }
@@ -575,14 +583,16 @@ async fn add_or_del_route(
                 sin6_port: 0,
                 sin6_flowinfo: 0,
                 sin6_addr: in6_addr {
-                    __u6_addr: unsafe { std::mem::transmute(addr.octets()) },
+                    __u6_addr: unsafe {
+                        std::mem::transmute::<[u8; 16], in6_addr__bindgen_ty_1>(addr.octets())
+                    },
                 },
                 sin6_scope_id: 0,
             };
 
             let sa_ptr = &sa_in as *const sockaddr_in6 as *const u8;
             let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
-            (&mut rtmsg.attrs[attr_offset..attr_offset + sa_len]).copy_from_slice(sa_bytes);
+            rtmsg.attrs[attr_offset..attr_offset + sa_len].copy_from_slice(sa_bytes);
 
             attr_offset += sa_len;
         }
@@ -614,7 +624,7 @@ async fn add_or_del_route(
         return Err(io::Error::new(ErrorKind::Other, "Unexpected message len"));
     }
 
-    let rt_hdr: &rt_msghdr = unsafe { std::mem::transmute(buf.as_ptr()) };
+    let rt_hdr: &rt_msghdr = unsafe { &*(buf.as_ptr() as *const rt_msghdr) };
     assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
     if rt_hdr.rtm_errno != 0 {
         return Err(code_to_error(rt_hdr.rtm_errno));
