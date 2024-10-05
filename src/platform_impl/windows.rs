@@ -3,49 +3,53 @@ use futures::Stream;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::{io, net::IpAddr};
 use tokio::sync::broadcast;
-use winapi::ctypes::c_void;
-use winapi::shared::netioapi::{
-    CancelMibChangeNotify2, CreateIpForwardEntry2, FreeMibTable, GetIpForwardTable2,
-    MibAddInstance, MibDeleteInstance, MibParameterNotification, NotifyRouteChange2,
-    MIB_NOTIFICATION_TYPE, PMIB_IPFORWARD_TABLE2, DeleteIpForwardEntry2,
+use windows_sys::Win32::{
+    Foundation::{BOOLEAN, ERROR_SUCCESS, HANDLE},
+    NetworkManagement::{
+        IpHelper::{
+            CancelMibChangeNotify2, CreateIpForwardEntry2, DeleteIpForwardEntry2, FreeMibTable,
+            GetIpForwardTable2, InitializeIpForwardEntry, MibAddInstance, MibDeleteInstance,
+            MibParameterNotification, NotifyRouteChange2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+            MIB_NOTIFICATION_TYPE,
+        },
+        Ndis::NET_LUID_LH,
+    },
+    Networking::WinSock::{AF_INET, AF_INET6, AF_UNSPEC, IN6_ADDR, IN_ADDR},
 };
-use winapi::shared::netioapi::{InitializeIpForwardEntry, MIB_IPFORWARD_ROW2};
-use winapi::shared::ntdef::HANDLE;
-use winapi::shared::winerror::ERROR_SUCCESS;
-use winapi::shared::ws2def::{AF_INET, AF_INET6, AF_UNSPEC};
-use winapi::shared::wtypesbase::BOOLEAN;
 
 use crate::{Route, RouteChange};
 
-unsafe fn row_to_route(row: *mut MIB_IPFORWARD_ROW2) -> Option<Route> {
-    let dst_family = (*row).DestinationPrefix.Prefix.si_family();
-    let dst = match *dst_family as i32 {
-        AF_INET => IpAddr::from(std::mem::transmute::<_, [u8; 4]>(
-            (*row).DestinationPrefix.Prefix.Ipv4().sin_addr,
+unsafe fn row_to_route(row: *const MIB_IPFORWARD_ROW2) -> Option<Route> {
+    let dst_family = (*row).DestinationPrefix.Prefix.si_family;
+    let dst = match dst_family {
+        AF_INET => IpAddr::from(std::mem::transmute::<IN_ADDR, [u8; 4]>(
+            (*row).DestinationPrefix.Prefix.Ipv4.sin_addr,
         )),
-        AF_INET6 => IpAddr::from(std::mem::transmute::<_, [u8; 16]>(
-            (*row).DestinationPrefix.Prefix.Ipv6().sin6_addr,
+        AF_INET6 => IpAddr::from(std::mem::transmute::<IN6_ADDR, [u8; 16]>(
+            (*row).DestinationPrefix.Prefix.Ipv6.sin6_addr,
         )),
         _ => panic!("Unexpected family {}", dst_family),
     };
 
     let dst_len = (*row).DestinationPrefix.PrefixLength;
 
-    let nexthop_family = (*row).NextHop.si_family();
+    let nexthop_family = (*row).NextHop.si_family;
 
-    let gateway = match *nexthop_family as i32 {
-        AF_INET => Some(IpAddr::from(std::mem::transmute::<_, [u8; 4]>(
-            (*row).NextHop.Ipv4().sin_addr,
+    let gateway = match nexthop_family {
+        AF_INET => Some(IpAddr::from(std::mem::transmute::<IN_ADDR, [u8; 4]>(
+            (*row).NextHop.Ipv4.sin_addr,
         ))),
-        AF_INET6 => Some(IpAddr::from(std::mem::transmute::<_, [u8; 16]>(
-            (*row).NextHop.Ipv6().sin6_addr,
+        AF_INET6 => Some(IpAddr::from(std::mem::transmute::<IN6_ADDR, [u8; 16]>(
+            (*row).NextHop.Ipv6.sin6_addr,
         ))),
         _ => None,
     };
 
     let mut route = Route::new(dst, dst_len)
         .with_ifindex((*row).InterfaceIndex)
-        .with_luid(std::mem::transmute((*row).InterfaceLuid))
+        .with_luid(std::mem::transmute::<NET_LUID_LH, u64>(
+            (*row).InterfaceLuid,
+        ))
         .with_metric((*row).Metric);
 
     route.gateway = gateway;
@@ -53,14 +57,14 @@ unsafe fn row_to_route(row: *mut MIB_IPFORWARD_ROW2) -> Option<Route> {
 }
 
 unsafe extern "system" fn callback(
-    callercontext: *mut c_void,
-    row: *mut MIB_IPFORWARD_ROW2,
-    notification_type: MIB_NOTIFICATION_TYPE,
+    callercontext: *const core::ffi::c_void,
+    row: *const MIB_IPFORWARD_ROW2,
+    notificationtype: MIB_NOTIFICATION_TYPE,
 ) {
     let tx = &*(callercontext as *const broadcast::Sender<RouteChange>);
 
     if let Some(route) = row_to_route(row) {
-        let event = match notification_type {
+        let event = match notificationtype {
             n if n == MibParameterNotification => RouteChange::Change(route),
             n if n == MibAddInstance => RouteChange::Add(route),
             n if n == MibDeleteInstance => RouteChange::Delete(route),
@@ -98,7 +102,7 @@ impl Handle {
         // TODO we could wait until `route_listen_stream` is called to initialize this
         let ret = unsafe {
             NotifyRouteChange2(
-                AF_UNSPEC as u16,
+                AF_UNSPEC,
                 Some(callback),
                 (tx_clone.as_mut() as *mut _) as *mut _,
                 BOOLEAN::from(false),
@@ -142,19 +146,21 @@ impl Handle {
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
         let mut list = self.list().await?;
-        list.retain(|route| (route.destination == Ipv4Addr::UNSPECIFIED
+        list.retain(|route| {
+            (route.destination == Ipv4Addr::UNSPECIFIED
                 || route.destination == Ipv6Addr::UNSPECIFIED)
                 && route.prefix == 0
                 && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-                && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+                && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
+        });
         list.sort_by(|a, b| a.metric.cmp(&b.metric));
         Ok(list.into_iter().next())
     }
 
     pub(crate) async fn list(&self) -> io::Result<Vec<Route>> {
-        let mut ptable: PMIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+        let mut ptable: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
 
-        let ret = unsafe { GetIpForwardTable2(AF_UNSPEC as u16, &mut ptable) };
+        let ret = unsafe { GetIpForwardTable2(AF_UNSPEC, &mut ptable as *mut _ as *mut _) };
         if ret != ERROR_SUCCESS {
             return Err(code_to_error(ret, "Error getting table: {}"));
         }
@@ -169,7 +175,7 @@ impl Handle {
         let entries = unsafe { (*ptable).NumEntries };
         let res = (0..entries)
             .map(|idx| unsafe { (*prows)[idx as usize] })
-            .filter_map(|mut row| unsafe { row_to_route(&mut row) })
+            .filter_map(|row| unsafe { row_to_route(&row) })
             .collect::<Vec<_>>();
         unsafe { FreeMibTable(ptable as *mut _ as *mut _) };
         Ok(res)
@@ -212,41 +218,41 @@ impl From<&Route> for MIB_IPFORWARD_ROW2 {
         }
 
         if let Some(luid) = route.luid {
-            row.InterfaceLuid = unsafe { std::mem::transmute(luid) };
+            row.InterfaceLuid = unsafe { std::mem::transmute::<u64, NET_LUID_LH>(luid) };
         }
 
         if let Some(gateway) = route.gateway {
             match gateway {
                 IpAddr::V4(addr) => unsafe {
-                    *row.NextHop.si_family_mut() = AF_INET as u16;
-                    row.NextHop.Ipv4_mut().sin_addr = std::mem::transmute(addr.octets());
+                    row.NextHop.si_family = AF_INET;
+                    row.NextHop.Ipv4.sin_addr =
+                        std::mem::transmute::<[u8; 4], IN_ADDR>(addr.octets());
                 },
                 IpAddr::V6(addr) => unsafe {
-                    *row.NextHop.si_family_mut() = AF_INET6 as u16;
-                    row.NextHop.Ipv6_mut().sin6_addr = std::mem::transmute(addr.octets());
+                    row.NextHop.si_family = AF_INET6;
+                    row.NextHop.Ipv6.sin6_addr =
+                        std::mem::transmute::<[u8; 16], IN6_ADDR>(addr.octets());
                 },
             }
         } else {
             // if we're not setting the gateway we need to explicitly set the family.
-            unsafe {
-                *row.NextHop.si_family_mut() = match route.destination {
-                    IpAddr::V4(_) => AF_INET,
-                    IpAddr::V6(_) => AF_INET6,
-                } as u16;
-            }
+            row.NextHop.si_family = match route.destination {
+                IpAddr::V4(_) => AF_INET,
+                IpAddr::V6(_) => AF_INET6,
+            };
         }
 
         row.DestinationPrefix.PrefixLength = route.prefix;
         match route.destination {
             IpAddr::V4(addr) => unsafe {
-                *row.DestinationPrefix.Prefix.si_family_mut() = AF_INET as u16;
-                row.DestinationPrefix.Prefix.Ipv4_mut().sin_addr =
-                    std::mem::transmute(addr.octets());
+                row.DestinationPrefix.Prefix.si_family = AF_INET;
+                row.DestinationPrefix.Prefix.Ipv4.sin_addr =
+                    std::mem::transmute::<[u8; 4], IN_ADDR>(addr.octets());
             },
             IpAddr::V6(addr) => unsafe {
-                *row.DestinationPrefix.Prefix.si_family_mut() = AF_INET6 as u16;
-                row.DestinationPrefix.Prefix.Ipv6_mut().sin6_addr =
-                    std::mem::transmute(addr.octets());
+                row.DestinationPrefix.Prefix.si_family = AF_INET6;
+                row.DestinationPrefix.Prefix.Ipv6.sin6_addr =
+                    std::mem::transmute::<[u8; 16], IN6_ADDR>(addr.octets());
             },
         }
 

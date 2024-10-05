@@ -1,4 +1,4 @@
-use net_route::{Route, Handle};
+use net_route::{Handle, Route};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {

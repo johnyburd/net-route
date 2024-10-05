@@ -2,7 +2,7 @@ fn main() {
     // detect docs rs builder so we don't try to link to macos libs while cross compiling
     let docs_builder = std::env::var("DOCS_RS").is_ok();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    
+
     if target_os == "macos" && !docs_builder {
         build_macos();
     }
