@@ -37,7 +37,7 @@ tokio = { version = "1", features = [
 rtnetlink = "0.14"
 netlink-sys = "0.8.5"
 netlink-packet-core = "0.7.0"
-netlink-packet-route = "0.19"
+netlink-packet-route = "0.21"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
