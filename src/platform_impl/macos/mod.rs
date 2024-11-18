@@ -1,4 +1,6 @@
 mod bind;
+
+#[allow(clippy::module_inception)]
 pub(crate) mod macos;
 
 pub(crate) use macos::Handle;
