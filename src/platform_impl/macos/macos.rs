@@ -612,6 +612,7 @@ async fn add_or_del_route(
         unsafe { std::slice::from_raw_parts(ptr, len) }
     };
     let route_fd = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    route_fd.set_nonblocking(true)?;
     let mut f: UnixStream = route_fd.try_into()?;
 
     f.write_all(slice).await?;
