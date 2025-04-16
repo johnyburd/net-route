@@ -59,7 +59,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [build-dependencies]
-bindgen = "0.70"
+bindgen = "0.71"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread"] }
