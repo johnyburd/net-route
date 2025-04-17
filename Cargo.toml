@@ -34,7 +34,7 @@ tokio = { version = "1", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rtnetlink = "0.14"
+rtnetlink = "0.16"
 netlink-sys = "0.8.5"
 netlink-packet-core = "0.7.0"
 netlink-packet-route = "0.19"
