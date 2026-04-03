@@ -59,7 +59,7 @@ impl Handle {
         while let Some(route) = routes
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             if route.destination_prefix().is_none() {
                 return Ok(Some(route.into()));
@@ -75,7 +75,7 @@ impl Handle {
         while let Some(route) = routes
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             if route.destination_prefix().is_none() {
                 return Ok(Some(route.into()));
@@ -95,7 +95,7 @@ impl Handle {
         while let Some(route) = route_messages
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             routes.push(route.into());
         }
@@ -109,7 +109,7 @@ impl Handle {
         while let Some(route) = route_messages
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             routes.push(route.into());
         }
@@ -142,7 +142,7 @@ impl Handle {
         while let Some(msg) = routes
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             let other_route: Route = msg.clone().into();
             if other_route.destination == route.destination
@@ -153,7 +153,7 @@ impl Handle {
                     .del(msg)
                     .execute()
                     .await
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| Error::other(e.to_string()))?;
                 return Ok(());
             }
         }
@@ -219,7 +219,7 @@ impl Handle {
                     .add(builder.build())
                     .execute()
                     .await
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
+                    .map_err(|e| Error::other(e.to_string()))
             }
             IpAddr::V6(addr) => {
                 let mut builder = RouteMessageBuilder::<Ipv6Addr>::new()
@@ -273,7 +273,7 @@ impl Handle {
                     .add(builder.build())
                     .execute()
                     .await
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
+                    .map_err(|e| Error::other(e.to_string()))
             }
         }
     }
