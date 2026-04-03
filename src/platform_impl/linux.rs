@@ -15,7 +15,7 @@ use tokio::{sync::broadcast, task::JoinHandle};
 
 use rtnetlink::{
     constants::{RTMGRP_IPV4_ROUTE, RTMGRP_IPV6_ROUTE},
-    new_connection,
+    new_connection, RouteMessageBuilder,
 };
 
 pub struct Handle {
@@ -50,24 +50,32 @@ impl Handle {
     }
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
-        let mut routes = self.handle.route().get(rtnetlink::IpVersion::V4).execute();
+        let mut routes = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv4Addr>::new().build())
+            .execute();
 
         while let Some(route) = routes
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             if route.destination_prefix().is_none() {
                 return Ok(Some(route.into()));
             }
         }
 
-        let mut routes = self.handle.route().get(rtnetlink::IpVersion::V6).execute();
+        let mut routes = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv6Addr>::new().build())
+            .execute();
 
         while let Some(route) = routes
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             if route.destination_prefix().is_none() {
                 return Ok(Some(route.into()));
@@ -78,22 +86,30 @@ impl Handle {
 
     pub(crate) async fn list(&self) -> io::Result<Vec<Route>> {
         let mut routes = vec![];
-        let mut route_messages = self.handle.route().get(rtnetlink::IpVersion::V4).execute();
+        let mut route_messages = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv4Addr>::new().build())
+            .execute();
 
         while let Some(route) = route_messages
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             routes.push(route.into());
         }
 
-        let mut route_messages = self.handle.route().get(rtnetlink::IpVersion::V6).execute();
+        let mut route_messages = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv6Addr>::new().build())
+            .execute();
 
         while let Some(route) = route_messages
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             routes.push(route.into());
         }
@@ -118,15 +134,15 @@ impl Handle {
     pub(crate) async fn delete(&self, route: &Route) -> io::Result<()> {
         let route_handle = self.handle.route();
         let mut routes = match route.destination {
-            IpAddr::V4(_) => route_handle.get(rtnetlink::IpVersion::V4),
-            IpAddr::V6(_) => route_handle.get(rtnetlink::IpVersion::V6),
+            IpAddr::V4(_) => route_handle.get(RouteMessageBuilder::<Ipv4Addr>::new().build()),
+            IpAddr::V6(_) => route_handle.get(RouteMessageBuilder::<Ipv6Addr>::new().build()),
         }
         .execute();
 
         while let Some(msg) = routes
             .try_next()
             .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| Error::other(e.to_string()))?
         {
             let other_route: Route = msg.clone().into();
             if other_route.destination == route.destination
@@ -137,7 +153,7 @@ impl Handle {
                     .del(msg)
                     .execute()
                     .await
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| Error::other(e.to_string()))?;
                 return Ok(());
             }
         }
@@ -152,23 +168,21 @@ impl Handle {
         let route_handle = self.handle.route();
         match route.destination {
             IpAddr::V4(addr) => {
-                let mut msg = route_handle
-                    .add()
-                    .v4()
+                let mut builder = RouteMessageBuilder::<Ipv4Addr>::new()
                     .table_id(route.table.into())
                     .destination_prefix(addr, route.prefix);
 
                 if let Some(ifindex) = route.ifindex {
-                    msg = msg.output_interface(ifindex);
+                    builder = builder.output_interface(ifindex);
                 }
 
                 if let Some(metric) = route.metric {
-                    msg = msg.priority(metric);
+                    builder = builder.priority(metric);
                 }
 
                 if let Some(gateway) = route.gateway {
-                    msg = match gateway {
-                        IpAddr::V4(addr) => msg.gateway(addr),
+                    builder = match gateway {
+                        IpAddr::V4(addr) => builder.gateway(addr),
                         IpAddr::V6(_) => {
                             return Err(Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -179,8 +193,8 @@ impl Handle {
                 }
 
                 if let Some(src_hint) = route.source_hint {
-                    msg = match src_hint {
-                        IpAddr::V4(addr) => msg.pref_source(addr),
+                    builder = match src_hint {
+                        IpAddr::V4(addr) => builder.pref_source(addr),
                         IpAddr::V6(_) => {
                             return Err(Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -191,8 +205,8 @@ impl Handle {
                 }
 
                 if let Some(src) = route.source {
-                    msg = match src {
-                        IpAddr::V4(addr) => msg.source_prefix(addr, route.source_prefix),
+                    builder = match src {
+                        IpAddr::V4(addr) => builder.source_prefix(addr, route.source_prefix),
                         IpAddr::V6(_) => {
                             return Err(Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -201,28 +215,28 @@ impl Handle {
                         }
                     };
                 }
-                msg.execute()
+                route_handle
+                    .add(builder.build())
+                    .execute()
                     .await
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
+                    .map_err(|e| Error::other(e.to_string()))
             }
             IpAddr::V6(addr) => {
-                let mut msg = route_handle
-                    .add()
-                    .v6()
+                let mut builder = RouteMessageBuilder::<Ipv6Addr>::new()
                     .table_id(route.table.into())
                     .destination_prefix(addr, route.prefix);
 
                 if let Some(ifindex) = route.ifindex {
-                    msg = msg.output_interface(ifindex);
+                    builder = builder.output_interface(ifindex);
                 }
 
                 if let Some(metric) = route.metric {
-                    msg = msg.priority(metric);
+                    builder = builder.priority(metric);
                 }
 
                 if let Some(gateway) = route.gateway {
-                    msg = match gateway {
-                        IpAddr::V6(addr) => msg.gateway(addr),
+                    builder = match gateway {
+                        IpAddr::V6(addr) => builder.gateway(addr),
                         IpAddr::V4(_) => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -233,8 +247,8 @@ impl Handle {
                 }
 
                 if let Some(src_hint) = route.source_hint {
-                    msg = match src_hint {
-                        IpAddr::V6(addr) => msg.pref_source(addr),
+                    builder = match src_hint {
+                        IpAddr::V6(addr) => builder.pref_source(addr),
                         IpAddr::V4(_) => {
                             return Err(Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -245,8 +259,8 @@ impl Handle {
                 }
 
                 if let Some(src) = route.source {
-                    msg = match src {
-                        IpAddr::V6(addr) => msg.source_prefix(addr, route.source_prefix),
+                    builder = match src {
+                        IpAddr::V6(addr) => builder.source_prefix(addr, route.source_prefix),
                         IpAddr::V4(_) => {
                             return Err(Error::new(
                                 io::ErrorKind::InvalidInput,
@@ -255,9 +269,11 @@ impl Handle {
                         }
                     };
                 }
-                msg.execute()
+                route_handle
+                    .add(builder.build())
+                    .execute()
                     .await
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
+                    .map_err(|e| Error::other(e.to_string()))
             }
         }
     }

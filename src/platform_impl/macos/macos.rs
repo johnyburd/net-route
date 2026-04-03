@@ -1,7 +1,6 @@
 use std::{
     ffi::CString,
-    io::{self, ErrorKind},
-    mem,
+    io, mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::prelude::FromRawFd,
 };
@@ -364,10 +363,7 @@ fn try_get_msg_buf() -> io::Result<(Vec<u8>, usize)> {
         }
     }
 
-    Err(io::Error::new(
-        io::ErrorKind::Other,
-        "Failed to get routing table",
-    ))
+    Err(io::Error::other("Failed to get routing table"))
 }
 
 async fn list_routes() -> io::Result<Vec<Route>> {
@@ -505,7 +501,7 @@ async fn add_or_del_route(
                     sin_family: AF_INET as u8,
                     sin_port: 0,
                     sin_addr: in_addr {
-                        s_addr: unsafe { std::mem::transmute::<[u8; 4], u32>(addr.octets()) },
+                        s_addr: u32::from_ne_bytes(addr.octets()),
                     },
                     sin_zero: [0i8; 8],
                 };
@@ -564,7 +560,7 @@ async fn add_or_del_route(
                 sin_family: AF_INET as u8,
                 sin_port: 0,
                 sin_addr: in_addr {
-                    s_addr: unsafe { std::mem::transmute::<[u8; 4], u32>(addr.octets()) },
+                    s_addr: u32::from_ne_bytes(addr.octets()),
                 },
                 sin_zero: [0i8; 8],
             };
@@ -622,7 +618,7 @@ async fn add_or_del_route(
     let read = f.read(&mut buf).await?;
 
     if read < std::mem::size_of::<rt_msghdr>() {
-        return Err(io::Error::new(ErrorKind::Other, "Unexpected message len"));
+        return Err(io::Error::other("Unexpected message len"));
     }
 
     let rt_hdr: &rt_msghdr = unsafe { &*(buf.as_ptr() as *const rt_msghdr) };
