@@ -50,7 +50,11 @@ impl Handle {
     }
 
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
-        let mut routes = self.handle.route().get(RouteMessageBuilder::<Ipv4Addr>::new().build()).execute();
+        let mut routes = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv4Addr>::new().build())
+            .execute();
 
         while let Some(route) = routes
             .try_next()
@@ -62,7 +66,11 @@ impl Handle {
             }
         }
 
-        let mut routes = self.handle.route().get(RouteMessageBuilder::<Ipv6Addr>::new().build()).execute();
+        let mut routes = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv6Addr>::new().build())
+            .execute();
 
         while let Some(route) = routes
             .try_next()
@@ -78,7 +86,11 @@ impl Handle {
 
     pub(crate) async fn list(&self) -> io::Result<Vec<Route>> {
         let mut routes = vec![];
-        let mut route_messages = self.handle.route().get(RouteMessageBuilder::<Ipv4Addr>::new().build()).execute();
+        let mut route_messages = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv4Addr>::new().build())
+            .execute();
 
         while let Some(route) = route_messages
             .try_next()
@@ -88,7 +100,11 @@ impl Handle {
             routes.push(route.into());
         }
 
-        let mut route_messages = self.handle.route().get(RouteMessageBuilder::<Ipv6Addr>::new().build()).execute();
+        let mut route_messages = self
+            .handle
+            .route()
+            .get(RouteMessageBuilder::<Ipv6Addr>::new().build())
+            .execute();
 
         while let Some(route) = route_messages
             .try_next()
@@ -199,7 +215,8 @@ impl Handle {
                         }
                     };
                 }
-                route_handle.add(builder.build())
+                route_handle
+                    .add(builder.build())
                     .execute()
                     .await
                     .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
@@ -252,7 +269,8 @@ impl Handle {
                         }
                     };
                 }
-                route_handle.add(builder.build())
+                route_handle
+                    .add(builder.build())
                     .execute()
                     .await
                     .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))
