@@ -433,6 +433,9 @@ async fn add_or_del_route(
     if add {
         rtm_addrs |= RTA_GATEWAY;
     }
+    if ifindex.is_some() {
+        rtm_addrs |= RTA_IFP;
+    }
 
     let rtm_type = if add { RTM_ADD } else { RTM_DELETE } as u8;
 
@@ -540,22 +543,6 @@ async fn add_or_del_route(
         }
     }
 
-    if let Some(ifindex) = ifindex {
-        let sdl_len = std::mem::size_of::<sockaddr_dl>();
-        let sa_dl = sockaddr_dl {
-            sdl_len: sdl_len as u8,
-            sdl_family: AF_LINK as u8,
-            sdl_index: ifindex as u16,
-            ..Default::default()
-        };
-
-        let sa_ptr = &sa_dl as *const sockaddr_dl as *const u8;
-        let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sdl_len) };
-        rtmsg.attrs[attr_offset..attr_offset + sdl_len].copy_from_slice(sa_bytes);
-
-        attr_offset += sdl_len;
-    }
-
     match dst_mask {
         IpAddr::V4(addr) => {
             let sa_len = std::mem::size_of::<sockaddr_in>();
@@ -596,6 +583,23 @@ async fn add_or_del_route(
 
             attr_offset += sa_len;
         }
+    }
+
+    // The kernel reads the addresses in RTAX order, so the interface follows the netmask.
+    if let Some(ifindex) = ifindex {
+        let sdl_len = std::mem::size_of::<sockaddr_dl>();
+        let sa_dl = sockaddr_dl {
+            sdl_len: sdl_len as u8,
+            sdl_family: AF_LINK as u8,
+            sdl_index: ifindex as u16,
+            ..Default::default()
+        };
+
+        let sa_ptr = &sa_dl as *const sockaddr_dl as *const u8;
+        let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sdl_len) };
+        rtmsg.attrs[attr_offset..attr_offset + sdl_len].copy_from_slice(sa_bytes);
+
+        attr_offset += sdl_len;
     }
 
     let msg_len = std::mem::size_of::<rt_msghdr>() + attr_offset;
