@@ -124,6 +124,10 @@ pub struct Route {
     ///
     /// If luid is specified, ifindex is optional.
     pub luid: Option<u64>,
+
+    #[cfg(target_os = "macos")]
+    /// The `RTF_*` flags the kernel reports for this route. Routes built here carry `0`.
+    pub flags: u32,
 }
 
 impl Route {
@@ -149,6 +153,8 @@ impl Route {
             metric: None,
             #[cfg(target_os = "windows")]
             luid: None,
+            #[cfg(target_os = "macos")]
+            flags: 0,
         }
     }
 

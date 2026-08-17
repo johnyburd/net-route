@@ -53,18 +53,26 @@ impl Handle {
         Ok(Self { tx, listen_handle })
     }
 
+    /// The preferred default route, ranked by scope.
+    ///
+    /// The system marks the default routes of lower-ranked services with `RTF_IFSCOPE` and
+    /// leaves the preferred one unscoped.
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
-        for route in self.list().await? {
-            if (route.destination == Ipv4Addr::UNSPECIFIED
-                || route.destination == Ipv6Addr::UNSPECIFIED)
-                && route.prefix == 0
-                && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-                && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
-            {
-                return Ok(Some(route));
-            }
-        }
-        Ok(None)
+        let mut candidates: Vec<Route> = self
+            .list()
+            .await?
+            .into_iter()
+            .filter(|route| {
+                (route.destination == Ipv4Addr::UNSPECIFIED
+                    || route.destination == Ipv6Addr::UNSPECIFIED)
+                    && route.prefix == 0
+                    && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+                    && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
+            })
+            .collect();
+
+        candidates.sort_by_key(|route| route.flags & RTF_IFSCOPE != 0);
+        Ok(candidates.into_iter().next())
     }
 
     pub(crate) fn route_listen_stream(&self) -> impl futures::Stream<Item = RouteChange> {
@@ -237,6 +245,7 @@ fn message_to_route(hdr: &rt_msghdr, msg: &[u8]) -> Option<Route> {
         prefix,
         gateway,
         ifindex: Some(hdr.rtm_index as u32),
+        flags: hdr.rtm_flags as u32,
     })
 }
 

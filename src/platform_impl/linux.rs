@@ -49,28 +49,27 @@ impl Handle {
         })
     }
 
+    /// The preferred default route, ranked by metric, lowest first.
+    ///
+    /// V4 is answered before V6.
     pub(crate) async fn default_route(&self) -> io::Result<Option<Route>> {
-        let mut routes = self.handle.route().get(rtnetlink::IpVersion::V4).execute();
+        for version in [rtnetlink::IpVersion::V4, rtnetlink::IpVersion::V6] {
+            let mut routes = self.handle.route().get(version).execute();
+            let mut defaults: Vec<Route> = vec![];
 
-        while let Some(route) = routes
-            .try_next()
-            .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
-        {
-            if route.destination_prefix().is_none() {
-                return Ok(Some(route.into()));
+            while let Some(route) = routes
+                .try_next()
+                .await
+                .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
+            {
+                if route.destination_prefix().is_none() {
+                    defaults.push(route.into());
+                }
             }
-        }
 
-        let mut routes = self.handle.route().get(rtnetlink::IpVersion::V6).execute();
-
-        while let Some(route) = routes
-            .try_next()
-            .await
-            .map_err(|e| Error::new(io::ErrorKind::Other, e.to_string()))?
-        {
-            if route.destination_prefix().is_none() {
-                return Ok(Some(route.into()));
+            defaults.sort_by_key(|route| route.metric.unwrap_or(u32::MAX));
+            if let Some(route) = defaults.into_iter().next() {
+                return Ok(Some(route));
             }
         }
         Ok(None)
