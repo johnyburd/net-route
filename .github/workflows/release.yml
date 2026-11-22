@@ -1,0 +1,80 @@
+name: Release
+
+# `main` is the release branch.
+#   - PRs targeting `main`: package dry-run, docs build, semver check.
+#   - Commits landing on `main`: docs build, semver check, then the real publish.
+# Build/lint coverage for every branch and for `develop` lives in rust.yml.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc
+        run: cargo doc --locked --no-deps
+
+  semver:
+    name: Check semver.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+
+  publish:
+    name: Publish net-route to crates.io
+    needs: [docs, semver]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Look this version up on crates.io
+        id: decide
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[0].version')"
+          status="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -A 'net-route release workflow' \
+            "https://crates.io/api/v1/crates/net-route/${version}")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "net-route ${version}: crates.io responded ${status}"
+          case "${status}" in
+            200) echo "Already published - nothing left to do." ;;
+            404) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unexpected crates.io status ${status} for net-route ${version}" && exit 1 ;;
+          esac
+      - name: Dry run
+        if: ${{ github.event_name == 'pull_request' }}
+        run: cargo publish --locked --dry-run --verbose
+      # Deliberately no `!cancelled()`: nothing may have failed before an upload, and a
+      # version that is already on crates.io must not be re-uploaded.
+      - name: Publish
+        if: ${{ github.event_name == 'push' && steps.decide.outputs.publish == 'true' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked --verbose --token "${CARGO_REGISTRY_TOKEN}"

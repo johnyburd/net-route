@@ -425,8 +425,12 @@ async fn add_or_del_route(
         rtm_flags |= RTF_GATEWAY as i32;
     }
 
+    // `rtm_addrs` is a presence bitmap: the kernel walks the message body in ascending
+    // RTAX order of the bits set here, so every flag needs a matching sockaddr written
+    // below (dst, gateway, netmask, interface) and a flag without one shifts every
+    // attribute that follows it. Only claim attributes that are actually present.
     let mut rtm_addrs = RTA_DST | RTA_NETMASK;
-    if add {
+    if gateway.is_some() {
         rtm_addrs |= RTA_GATEWAY;
     }
     if ifindex.is_some() {

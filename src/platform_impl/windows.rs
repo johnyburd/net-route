@@ -153,7 +153,7 @@ impl Handle {
                 && route.gateway != Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
                 && route.gateway != Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
         });
-        list.sort_by(|a, b| a.metric.cmp(&b.metric));
+        list.sort_by_key(|route| route.metric);
         Ok(list.into_iter().next())
     }
 
