@@ -4,10 +4,8 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::time::Duration;
 
-use futures::StreamExt;
-use net_route::{Handle, Route, RouteChange};
+use net_route::{Handle, Route};
 
 // One distinct destination per test so they can run in parallel without colliding.
 const GW_NET: (IpAddr, u8) = (IpAddr::V4(Ipv4Addr::new(198, 51, 100, 0)), 24);
