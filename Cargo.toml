@@ -1,6 +1,6 @@
 [package]
 name = "net-route"
-version = "0.4.7"
+version = "0.4.8"
 authors = ["Johnyburd <jonathan@johnyburd.com>"]
 
 edition = "2021"
@@ -66,4 +66,4 @@ windows-sys = { version = "0.61", features = [
 bindgen = "0.72"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }

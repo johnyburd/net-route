@@ -41,9 +41,9 @@ jobs:
       - name: clippy
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Build
+      - name: Test
         if: ${{ !cancelled() }}
-        run: cargo build --locked --verbose --all-targets
+        run: cargo test --locked --verbose
 
   # Semver checks, docs builds and publishing live in release.yml, which is scoped to
   # `main`.

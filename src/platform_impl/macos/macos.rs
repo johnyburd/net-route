@@ -3,6 +3,8 @@ use std::{
     io, mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::prelude::FromRawFd,
+    sync::atomic::{AtomicU32, Ordering},
+    time::Duration,
 };
 
 use async_stream::stream;
@@ -412,6 +414,14 @@ fn code_to_error(err: i32) -> io::Error {
     io::Error::new(kind, format!("rtm_errno {}", err))
 }
 
+/// Sequence numbers for messages written to a routing socket. The per-process
+/// seed keeps this process' sequence numbers disjoint from other processes'
+fn next_route_seq() -> i32 {
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let seed = (std::process::id() as u32).rotate_left(8) ^ 0x9e37_79b9;
+    seed.wrapping_add(SEQ.fetch_add(1, Ordering::Relaxed)) as i32
+}
+
 /// Write an index-only AF_LINK `sockaddr_dl` at `offset` in
 /// the message body, and return the new offset.
 fn write_link_addr(rtmsg: &mut m_rtmsg, offset: usize, ifindex: u32) -> usize {
@@ -463,6 +473,9 @@ async fn add_or_del_route(
 
     let rtm_type = if add { RTM_ADD } else { RTM_DELETE } as u8;
 
+    let my_pid = std::process::id() as i32;
+    let my_seq = next_route_seq();
+
     let mut rtmsg = m_rtmsg {
         hdr: rt_msghdr {
             rtm_msglen: 128,
@@ -471,8 +484,8 @@ async fn add_or_del_route(
             rtm_index: 0,
             rtm_flags,
             rtm_addrs: rtm_addrs as i32,
-            rtm_pid: 0,
-            rtm_seq: 1,
+            rtm_pid: my_pid,
+            rtm_seq: my_seq,
             rtm_errno: 0,
             rtm_use: 0,
             rtm_inits: 0,
@@ -636,19 +649,35 @@ async fn add_or_del_route(
 
     f.write_all(slice).await?;
 
-    let mut buf = [0u8; std::mem::size_of::<m_rtmsg>()];
+    // Read until the message that echoes our pid/seq.
+    let mut buf = [0u8; 2048];
+    for _ in 0..64 {
+        let read = tokio::time::timeout(Duration::from_secs(5), f.read(&mut buf))
+            .await
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::TimedOut, "timed out waiting for route ack")
+            })??;
 
-    let read = f.read(&mut buf).await?;
+        if read < std::mem::size_of::<rt_msghdr>() {
+            continue;
+        }
 
-    if read < std::mem::size_of::<rt_msghdr>() {
-        return Err(io::Error::other("Unexpected message len"));
+        let rt_hdr: &rt_msghdr = unsafe { &*(buf.as_ptr() as *const rt_msghdr) };
+        assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
+
+        // Kernel-originated broadcasts carry rtm_pid 0; our ack carries this
+        // process' pid and the sequence number we sent.
+        if rt_hdr.rtm_seq != my_seq || (rt_hdr.rtm_pid != 0 && rt_hdr.rtm_pid != my_pid) {
+            continue;
+        }
+
+        if rt_hdr.rtm_errno != 0 {
+            return Err(code_to_error(rt_hdr.rtm_errno));
+        }
+        return Ok(());
     }
 
-    let rt_hdr: &rt_msghdr = unsafe { &*(buf.as_ptr() as *const rt_msghdr) };
-    assert_eq!(rt_hdr.rtm_version as u32, RTM_VERSION);
-    if rt_hdr.rtm_errno != 0 {
-        return Err(code_to_error(rt_hdr.rtm_errno));
-    }
-
-    Ok(())
+    Err(io::Error::other(
+        "route ack not found within 64 routing socket messages",
+    ))
 }

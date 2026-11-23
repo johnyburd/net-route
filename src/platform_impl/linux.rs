@@ -20,30 +20,35 @@ use rtnetlink::{
 
 pub struct Handle {
     handle: rtnetlink::Handle,
+    /// The request/response connection.
     join_handle: JoinHandle<()>,
+    /// A dedicated connection that is a member of the route multicast groups.
+    listen_conn_handle: JoinHandle<()>,
+    /// Held so the listen connection keeps running
+    _listen_route_handle: rtnetlink::Handle,
     listen_handle: JoinHandle<()>,
     tx: broadcast::Sender<RouteChange>,
 }
 
 impl Handle {
     pub(crate) fn new() -> io::Result<Self> {
-        let (mut connection, handle, messages) = new_connection()?;
-
-        // These flags specify what kinds of broadcast messages we want to listen for.
+        let (connection, handle, _) = new_connection()?;
+        let (mut listen_connection, listen_route_handle, messages) = new_connection()?;
         let mgroup_flags = RTMGRP_IPV4_ROUTE | RTMGRP_IPV6_ROUTE;
-
-        // A netlink socket address is created with said flags.
         let addr = SocketAddr::new(0, mgroup_flags);
-        // Said address is bound so new conenctions and thus new message broadcasts can be received.
-        connection.socket_mut().socket_mut().bind(&addr)?;
+        listen_connection.socket_mut().socket_mut().bind(&addr)?;
+
         let (tx, _) = broadcast::channel::<RouteChange>(16);
 
         let join_handle = tokio::spawn(connection);
+        let listen_conn_handle = tokio::spawn(listen_connection);
         let listen_handle = tokio::spawn(Self::listen(messages, tx.clone()));
 
         Ok(Self {
             handle,
             join_handle,
+            listen_conn_handle,
+            _listen_route_handle: listen_route_handle,
             listen_handle,
             tx,
         })
@@ -299,6 +304,7 @@ impl Handle {
 impl Drop for Handle {
     fn drop(&mut self) {
         self.join_handle.abort();
+        self.listen_conn_handle.abort();
         self.listen_handle.abort();
     }
 }
