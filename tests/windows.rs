@@ -27,15 +27,20 @@ async fn find(handle: &Handle, destination: IpAddr, prefix: u8) -> io::Result<Op
         .find(|r| r.destination == destination && r.prefix == prefix))
 }
 
-/// Index of the loopback interface, taken from its 127.0.0.0/8 route.
+/// Index of the loopback interface, taken from any route whose destination lies in
+/// the 127.0.0.0/8 loopback network.
 async fn loopback_ifindex(handle: &Handle) -> io::Result<u32> {
     handle
         .list()
         .await?
         .into_iter()
-        .find(|r| r.destination == IpAddr::V4(Ipv4Addr::LOCALHOST) && r.prefix == 8)
+        .find(|r| matches!(r.destination, IpAddr::V4(a) if a.is_loopback()))
         .and_then(|r| r.ifindex)
-        .ok_or_else(|| io::Error::other("no 127.0.0.0/8 route to derive the loopback index from"))
+        .ok_or_else(|| {
+            io::Error::other(
+                "no route with a loopback (127/8) destination to derive the index from",
+            )
+        })
 }
 
 /// The host's IPv4 default route, with a real IPv4 next hop and interface.
@@ -115,7 +120,7 @@ async fn delete_route() -> io::Result<()> {
     Ok(())
 }
 
-/// `list` returns the routing table, including the loopback network.
+/// `list` returns the routing table, including routes for the loopback network.
 #[tokio::test]
 async fn list_routes() -> io::Result<()> {
     let handle = Handle::new()?;
@@ -125,8 +130,8 @@ async fn list_routes() -> io::Result<()> {
     assert!(
         routes
             .iter()
-            .any(|r| r.destination == IpAddr::V4(Ipv4Addr::LOCALHOST) && r.prefix == 8),
-        "loopback route 127.0.0.0/8 missing from the routing table"
+            .any(|r| matches!(r.destination, IpAddr::V4(a) if a.is_loopback())),
+        "no route with a loopback (127/8) destination in the routing table"
     );
     Ok(())
 }

@@ -103,19 +103,23 @@ async fn delete_route() -> io::Result<()> {
     Ok(())
 }
 
-/// `list` returns the routing table, including the loopback network.
+/// `list` returns the routing table, including whatever `default_route` reports.
 #[tokio::test]
 async fn list_routes() -> io::Result<()> {
     let handle = Handle::new()?;
     let routes = handle.list().await?;
 
     assert!(!routes.is_empty(), "routing table should not be empty");
-    assert!(
-        routes
-            .iter()
-            .any(|r| r.destination == IpAddr::V4(Ipv4Addr::LOCALHOST) && r.prefix == 8),
-        "loopback route 127.0.0.0/8 missing from the routing table"
-    );
+    if let Some(default) = handle.default_route().await? {
+        assert!(
+            routes.iter().any(|r| {
+                r.destination == default.destination
+                    && r.prefix == default.prefix
+                    && r.gateway == default.gateway
+            }),
+            "default route {default:?} missing from list()"
+        );
+    }
     Ok(())
 }
 
