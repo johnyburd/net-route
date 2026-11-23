@@ -1,7 +1,6 @@
 use std::{
     ffi::CString,
-    io::{self, ErrorKind},
-    mem,
+    io, mem,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     os::unix::prelude::FromRawFd,
 };
@@ -364,10 +363,7 @@ fn try_get_msg_buf() -> io::Result<(Vec<u8>, usize)> {
         }
     }
 
-    Err(io::Error::new(
-        io::ErrorKind::Other,
-        "Failed to get routing table",
-    ))
+    Err(io::Error::other("Failed to get routing table"))
 }
 
 async fn list_routes() -> io::Result<Vec<Route>> {
@@ -416,6 +412,24 @@ fn code_to_error(err: i32) -> io::Error {
     io::Error::new(kind, format!("rtm_errno {}", err))
 }
 
+/// Write an index-only AF_LINK `sockaddr_dl` at `offset` in
+/// the message body, and return the new offset.
+fn write_link_addr(rtmsg: &mut m_rtmsg, offset: usize, ifindex: u32) -> usize {
+    let sa_len = std::mem::size_of::<sockaddr_dl>();
+    let sa_dl = sockaddr_dl {
+        sdl_len: sa_len as u8,
+        sdl_family: AF_LINK as u8,
+        sdl_index: ifindex as u16,
+        ..Default::default()
+    };
+
+    let sa_ptr = &sa_dl as *const sockaddr_dl as *const u8;
+    let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sa_len) };
+    rtmsg.attrs[offset..offset + sa_len].copy_from_slice(sa_bytes);
+
+    offset + sa_len
+}
+
 async fn add_or_del_route(
     dst: IpAddr,
     dst_mask: IpAddr,
@@ -429,9 +443,22 @@ async fn add_or_del_route(
         rtm_flags |= RTF_GATEWAY as i32;
     }
 
+    // `rtm_addrs` is a presence bitmap: the kernel walks the message body in ascending
+    // RTAX order of the bits set here, so every flag needs a matching sockaddr written
+    // below (dst, gateway, netmask, interface) and a flag without one shifts every
+    // attribute that follows it. Only claim attributes that are actually present.
+    let link_gate = if add && gateway.is_none() {
+        ifindex
+    } else {
+        None
+    };
+
     let mut rtm_addrs = RTA_DST | RTA_NETMASK;
-    if add {
+    if gateway.is_some() || link_gate.is_some() {
         rtm_addrs |= RTA_GATEWAY;
+    }
+    if gateway.is_some() && ifindex.is_some() {
+        rtm_addrs |= RTA_IFP;
     }
 
     let rtm_type = if add { RTM_ADD } else { RTM_DELETE } as u8;
@@ -505,7 +532,7 @@ async fn add_or_del_route(
                     sin_family: AF_INET as u8,
                     sin_port: 0,
                     sin_addr: in_addr {
-                        s_addr: unsafe { std::mem::transmute::<[u8; 4], u32>(addr.octets()) },
+                        s_addr: u32::from_ne_bytes(addr.octets()),
                     },
                     sin_zero: [0i8; 8],
                 };
@@ -538,22 +565,9 @@ async fn add_or_del_route(
                 attr_offset += sa_len;
             }
         }
-    }
-
-    if let Some(ifindex) = ifindex {
-        let sdl_len = std::mem::size_of::<sockaddr_dl>();
-        let sa_dl = sockaddr_dl {
-            sdl_len: sdl_len as u8,
-            sdl_family: AF_LINK as u8,
-            sdl_index: ifindex as u16,
-            ..Default::default()
-        };
-
-        let sa_ptr = &sa_dl as *const sockaddr_dl as *const u8;
-        let sa_bytes = unsafe { std::slice::from_raw_parts(sa_ptr, sdl_len) };
-        rtmsg.attrs[attr_offset..attr_offset + sdl_len].copy_from_slice(sa_bytes);
-
-        attr_offset += sdl_len;
+    } else if let Some(ifindex) = link_gate {
+        // The interface's link-layer address goes in the gateway slot
+        attr_offset = write_link_addr(&mut rtmsg, attr_offset, ifindex);
     }
 
     match dst_mask {
@@ -564,7 +578,7 @@ async fn add_or_del_route(
                 sin_family: AF_INET as u8,
                 sin_port: 0,
                 sin_addr: in_addr {
-                    s_addr: unsafe { std::mem::transmute::<[u8; 4], u32>(addr.octets()) },
+                    s_addr: u32::from_ne_bytes(addr.octets()),
                 },
                 sin_zero: [0i8; 8],
             };
@@ -598,6 +612,11 @@ async fn add_or_del_route(
         }
     }
 
+    // Interface qualifier follows the netmask because RTAX_IFP sorts after RTAX_NETMASK.
+    if let (Some(_), Some(ifindex)) = (gateway, ifindex) {
+        attr_offset = write_link_addr(&mut rtmsg, attr_offset, ifindex);
+    }
+
     let msg_len = std::mem::size_of::<rt_msghdr>() + attr_offset;
     rtmsg.hdr.rtm_msglen = msg_len as u16;
 
@@ -622,7 +641,7 @@ async fn add_or_del_route(
     let read = f.read(&mut buf).await?;
 
     if read < std::mem::size_of::<rt_msghdr>() {
-        return Err(io::Error::new(ErrorKind::Other, "Unexpected message len"));
+        return Err(io::Error::other("Unexpected message len"));
     }
 
     let rt_hdr: &rt_msghdr = unsafe { &*(buf.as_ptr() as *const rt_msghdr) };

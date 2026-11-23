@@ -1,15 +1,19 @@
 [package]
 name = "net-route"
-version = "0.4.6"
-authors = ["Johnyburd <johnyburd8@gmail.com>"]
+version = "0.4.7"
+authors = ["Johnyburd <jonathan@johnyburd.com>"]
 
 edition = "2021"
 license = "MIT"
 description = "This crate provides a cross-platform interface for manipulating the routing table"
-homepage = "https://github.com/johnyburd/net-route"
 repository = "https://github.com/johnyburd/net-route"
 readme = "README.md"
 keywords = ["route", "network", "ip"]
+exclude = [
+    "/.cargo/",
+    "/.github/",
+    "/.gitignore",
+]
 
 [package.metadata.docs.rs]
 
@@ -34,13 +38,13 @@ tokio = { version = "1", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rtnetlink = "0.14"
+rtnetlink = "0.18"
 netlink-sys = "0.8.5"
-netlink-packet-core = "0.7.0"
-netlink-packet-route = "0.19"
+netlink-packet-core = "0.8.0"
+netlink-packet-route = "0.25"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_System_SystemServices",
     "Win32_Security_Cryptography",
@@ -59,7 +63,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [build-dependencies]
-bindgen = "0.71"
+bindgen = "0.72"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread"] }

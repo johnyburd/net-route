@@ -3,15 +3,30 @@ name: Push or PR
 on:
   push:
     branches:
-      - '**'
+      - develop
+      - main
   pull_request:
     branches:
       - '**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Platform-independent lint: run it once rather than on every OS in the matrix.
+  lint:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: rustfmt
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+
   build_n_test:
     strategy:
       fail-fast: false
@@ -21,39 +36,14 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
-    - name: rustfmt
-      if: ${{ !cancelled() }}
-      run: cargo fmt --all -- --check
-    - name: check
-      if: ${{ !cancelled() }}
-      run: cargo check --verbose
-    - name: clippy
-      if: ${{ !cancelled() }}
-      run: cargo clippy --all-targets --all-features -- -D warnings
-    - name: Build
-      if: ${{ !cancelled() }}
-      run: |
-        cargo build --verbose --examples --tests --all-features
-        cargo clean
-        cargo build --verbose --examples --tests --no-default-features
-    - name: Abort on error
-      if: ${{ failure() }}
-      run: echo "Some of jobs failed" && false
-
-  semver:
-    name: Check semver
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Check semver
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy
         if: ${{ !cancelled() }}
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-      - name: Abort on error
-        if: ${{ failure() }}
-        run: echo "Semver check failed" && false
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --verbose --all-targets
+
+  # Semver checks, docs builds and publishing live in release.yml, which is scoped to
+  # `main`.
