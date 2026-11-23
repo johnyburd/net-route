@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::{io, net::IpAddr};
 use tokio::sync::broadcast;
 use windows_sys::Win32::{
-    Foundation::{BOOLEAN, ERROR_SUCCESS, HANDLE},
+    Foundation::{ERROR_SUCCESS, HANDLE},
     NetworkManagement::{
         IpHelper::{
             CancelMibChangeNotify2, CreateIpForwardEntry2, DeleteIpForwardEntry2, FreeMibTable,
@@ -105,7 +105,7 @@ impl Handle {
                 AF_UNSPEC,
                 Some(callback),
                 (tx_clone.as_mut() as *mut _) as *mut _,
-                BOOLEAN::from(false),
+                false,
                 &mut handle,
             )
         };
